@@ -12,8 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from auth_core.database import session_scope, refresh_object
-from auth_core.models import (AuthAttempt, AuthAttemptResult, Token, TokenType,
-                             User, UserRole)
+from auth_core.models import (AuthAttempt, AuthAttemptResult, Token, TokenStatus,
+                             TokenType, User, UserRole)
 from auth_core.security import (MAX_LOGIN_ATTEMPTS, default_password_manager,
                               get_lockout_time, is_account_locked)
 
@@ -566,11 +566,20 @@ class AuthenticationManager:
             session, ip_address, minutes=LOGIN_LOCKOUT_MINUTES, username=user.username
         )
         
-        # Combine both types of failures
-        total_failures = len(user_failures) + len(username_failures)
+        # Combine both types of failures, but avoid double-counting
+        # Create a set of IDs from user_failures to check for duplicates
+        user_failure_ids = {attempt.id for attempt in user_failures}
         
-        # Check if the account is locked
-        if is_account_locked(total_failures) or total_failures >= MAX_LOGIN_ATTEMPTS:
+        # Only add username_failures that aren't already counted in user_failures
+        unique_username_failures = [
+            attempt for attempt in username_failures 
+            if attempt.id not in user_failure_ids
+        ]
+        
+        total_failures = len(user_failures) + len(unique_username_failures)
+        
+        # Check if the account is locked - simplify the condition
+        if total_failures >= MAX_LOGIN_ATTEMPTS:
             logger.warning(f"User account locked due to too many failed attempts: {user.username}")
             lockout_time = get_lockout_time()
             raise AccountLockedError(
@@ -719,7 +728,45 @@ def logout_user_all_devices(user_id: int, current_token_id: Optional[str] = None
     Returns:
         Number of tokens revoked.
     """
-    return default_auth_manager.logout_user_all_devices(user_id, current_token_id)
+    # Use the session from the default_auth_manager if available
+    if default_auth_manager.session:
+        # Use the existing session directly
+        session = default_auth_manager.session
+        
+        # Query active tokens
+        query = session.query(Token).filter(
+            Token.user_id == user_id,
+            Token.status == TokenStatus.ACTIVE
+        )
+        
+        # Apply exclusion filter if a token ID is provided
+        if current_token_id:
+            logger.info(f"Excluding token {current_token_id} from revocation")
+            query = query.filter(Token.token_id != current_token_id)
+        
+        tokens = query.all()
+        
+        if not tokens:
+            logger.info(f"No active tokens found for user {user_id}")
+            return 0
+        
+        # Count of tokens to be revoked
+        count = len(tokens)
+        
+        # Revoke all tokens
+        for token in tokens:
+            token.status = TokenStatus.REVOKED
+            token.revoked_at = datetime.utcnow()
+        
+        # Commit the changes
+        session.commit()
+        
+        logger.info(f"Successfully revoked {count} tokens for user {user_id}")
+        return count
+    else:
+        # Use the default implementation
+        from auth_core.token import revoke_all_user_tokens
+        return revoke_all_user_tokens(user_id, current_token_id)
 
 
 # PUBLIC_INTERFACE
