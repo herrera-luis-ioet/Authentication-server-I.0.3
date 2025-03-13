@@ -916,14 +916,22 @@ def revoke_token(token: str) -> bool:
     """
     Revoke a token so it can no longer be used.
     
+    This function implements proper status transitions and verification:
+    - ACTIVE -> REVOKED
+    - EXPIRED -> REVOKED
+    
+    Invalid transitions:
+    - REVOKED -> REVOKED (idempotent operation)
+    - INVALID -> Any status
+    
     Args:
         token: JWT token string to revoke.
         
     Returns:
-        True if the token was successfully revoked, False otherwise.
+        True if the token was successfully revoked or was already revoked, False otherwise.
         
     Raises:
-        TokenInvalidError: If the token is invalid.
+        TokenInvalidError: If the token is invalid or the status transition is not allowed.
     """
     if not token:
         logger.warning("Empty token provided for revocation")
@@ -933,21 +941,25 @@ def revoke_token(token: str) -> bool:
         # Always decode without verifying expiration for revocation
         # This ensures we can revoke expired tokens
         try:
+            # First try to decode with signature verification
             payload = jwt.decode(
                 token,
                 jwt_settings["secret_key"],
                 algorithms=[jwt_settings["algorithm"]],
                 options={"verify_exp": False}
             )
-            logger.debug("Successfully decoded token for revocation")
+            logger.debug("Successfully decoded token for revocation with signature verification")
+            signature_verified = True
         except (DecodeError, InvalidTokenError) as e:
-            # If signature verification fails, try without verification
-            logger.info(f"Token signature invalid, decoding without verification for revocation: {str(e)}")
+            # If signature verification fails, try without verification for handling legacy or corrupted tokens
+            logger.warning(f"Token signature verification failed, attempting decode without verification: {str(e)}")
             try:
                 payload = jwt.decode(
                     token,
                     options={"verify_signature": False, "verify_exp": False}
                 )
+                signature_verified = False
+                logger.info("Successfully decoded token without signature verification")
             except Exception as e:
                 logger.error(f"Failed to decode token without verification: {str(e)}")
                 return False
@@ -955,21 +967,36 @@ def revoke_token(token: str) -> bool:
             logger.error(f"Failed to decode token for revocation: {str(e)}")
             return False
         
+        # Validate required claims
+        required_claims = ["jti", "type"]  # sub is optional for revocation
+        for claim in required_claims:
+            if claim not in payload:
+                logger.warning(f"Token missing required claim for revocation: {claim}")
+                return False
+        
         # Get token ID
         token_id = payload.get("jti")
         if not token_id:
             logger.warning("Token does not contain a valid ID (jti claim)")
             return False
         
-        # Get user ID if available
-        try:
-            user_id = int(payload.get("sub", 0))
-            if user_id <= 0:
-                logger.warning(f"Invalid user ID in token for revocation: {user_id}")
-                # Continue anyway as we might still be able to revoke by token_id
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid user ID format in token for revocation: {payload.get('sub')}")
-            user_id = 0  # Set to invalid ID
+        # Get token type
+        token_type = payload.get("type")
+        if token_type not in [TOKEN_TYPE_ACCESS, TOKEN_TYPE_REFRESH]:
+            logger.warning(f"Invalid token type for revocation: {token_type}")
+            return False
+        
+        # Get user ID if available (optional for revocation)
+        user_id = 0
+        if "sub" in payload:
+            try:
+                user_id = int(payload.get("sub"))
+                if user_id <= 0:
+                    logger.warning(f"Invalid user ID in token for revocation: {user_id}")
+                    user_id = 0  # Reset to invalid ID
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid user ID format in token for revocation: {payload.get('sub')}")
+                user_id = 0  # Set to invalid ID
         
         with session_scope() as session:
             try:
@@ -1126,18 +1153,42 @@ def revoke_token(token: str) -> bool:
                     logger.warning(f"Token not found in database for revocation: {token_id}")
                     return False
                 
-                # Check if token is already revoked
-                if db_token.status == TokenStatus.REVOKED:
+                # Verify current token status and handle transitions
+                current_status = db_token.status
+                current_time = datetime.datetime.utcnow()
+                
+                # Check if token is already revoked (idempotent operation)
+                if current_status == TokenStatus.REVOKED:
                     logger.info(f"Token already revoked: {token_id}")
                     return True
                 
-                # Store the current status for verification
-                original_status = db_token.status
+                # Check if token is expired but not marked as such
+                if current_status == TokenStatus.ACTIVE and db_token.expires_at < current_time:
+                    logger.info(f"Token {token_id} is expired but marked as active, updating status")
+                    current_status = TokenStatus.EXPIRED
+                    db_token.status = TokenStatus.EXPIRED
+                
+                # Validate status transition
+                valid_transitions = {
+                    TokenStatus.ACTIVE: [TokenStatus.REVOKED],
+                    TokenStatus.EXPIRED: [TokenStatus.REVOKED]
+                }
+                
+                if current_status not in valid_transitions:
+                    logger.warning(f"Invalid token status for revocation: {current_status}")
+                    return False
+                
+                if TokenStatus.REVOKED not in valid_transitions[current_status]:
+                    logger.warning(f"Invalid status transition from {current_status} to REVOKED")
+                    return False
+                
+                # Store the current status for verification and logging
+                original_status = current_status
                 
                 # Revoke the token
-                logger.info(f"Revoking token: {token_id}")
+                logger.info(f"Revoking token: {token_id} (transitioning from {original_status} to REVOKED)")
                 db_token.status = TokenStatus.REVOKED
-                db_token.revoked_at = datetime.datetime.utcnow()
+                db_token.revoked_at = current_time
                 
                 # Commit the changes
                 try:
