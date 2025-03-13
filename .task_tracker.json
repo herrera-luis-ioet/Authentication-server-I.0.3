@@ -1,0 +1,5 @@
+{
+  "task_description": "{'component_name': 'Authentication Core', 'description': '## Authentication Core Component\n\n### Core Technologies:\n- **Programming Language**: Python 3.9+\n- **Web Framework**: FastAPI\n- **Authentication Library**: PyJWT\n- **Cryptography**: cryptography library\n- **Database**: SQLite (for token storage if required)\n- **Runtime Environment**: Python virtual environment\n- **Integration Technologies**: RESTful APIs, HTTP/HTTPS\n- **UI Technologies**: None (API-only service)\n\n### Build and Development Tools:\n- **Build System**: Poetry/pip\n- **Development Tools**:\n  * VSCode/PyCharm\n  * Black (code formatter)\n  * Flake8 (linter)\n- **Testing Frameworks**:\n  * pytest\n  * unittest\n  * coverage.py\n- **Deployment & CI/CD**:\n  * Docker\n  * GitHub Actions\n  * Kubernetes (optional)\n\n### Key Capabilities:\n- Secure JWT token generation\n- User credential verification\n- Token validation and refresh\n- Brute force attack prevention\n- Compliance with security standards', 'interfaces': '', 'algorithms': '', 'pseudocode': '', 'figma_components': []}",
+  "tasks": {},
+  "next_task_id": 1
+}
