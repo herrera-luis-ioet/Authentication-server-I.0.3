@@ -466,7 +466,11 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     if db_token.status != TokenStatus.EXPIRED:
                         logger.info(f"Marking token as expired: {token_id}")
                         db_token.status = TokenStatus.EXPIRED
-                        session.commit()
+                        try:
+                            session.commit()
+                        except SQLAlchemyError as e:
+                            logger.warning(f"Failed to update token status to expired: {str(e)}")
+                            # Continue with the validation process, as this is just a status update
                     raise TokenExpiredError("Token has expired")
                 
                 # Check if user still exists and is active
@@ -523,11 +527,14 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
     """
     Generate a new access token using a valid refresh token.
     
+    This function validates the refresh token, checks if it's still valid and not revoked,
+    and then creates a new access token for the user.
+    
     Args:
         refresh_token: Refresh token string.
         
     Returns:
-        Dictionary containing the new access token.
+        Dictionary containing the new access token and token type.
         
     Raises:
         TokenExpiredError: If the refresh token has expired.
@@ -537,29 +544,51 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
     if not refresh_token:
         logger.warning("Empty refresh token provided")
         raise TokenInvalidError("Refresh token cannot be empty")
-        
+    
+    logger.debug("Starting refresh_access_token process")
+    
     try:
-        # Validate the refresh token
-        logger.debug("Validating refresh token")
-        payload = validate_token(refresh_token, expected_type=TOKEN_TYPE_REFRESH)
-        
-        # Get user ID from the token
-        user_id = payload.get("sub")
-        if not user_id:
-            logger.warning("Invalid refresh token: missing user ID")
-            raise TokenInvalidError("Invalid refresh token: missing user ID")
-        
-        # Get token ID
-        token_id = payload.get("jti")
-        if not token_id:
-            logger.warning("Invalid refresh token: missing token ID")
-            raise TokenInvalidError("Invalid refresh token: missing token ID")
-        
+        # First decode the token to validate basic structure before database checks
         try:
-            user_id_int = int(user_id)
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid user ID format in refresh token: {user_id}")
-            raise TokenInvalidError(f"Invalid user ID format in refresh token: {str(e)}")
+            # Just decode without full validation first
+            payload = jwt.decode(
+                refresh_token,
+                jwt_settings["secret_key"],
+                algorithms=[jwt_settings["algorithm"]]
+            )
+            
+            # Check token type
+            if payload.get("type") != TOKEN_TYPE_REFRESH:
+                logger.warning(f"Invalid token type for refresh: {payload.get('type')}")
+                raise TokenInvalidError(f"Invalid token type for refresh: {payload.get('type')}")
+            
+            # Get user ID from the token
+            user_id = payload.get("sub")
+            if not user_id:
+                logger.warning("Invalid refresh token: missing user ID")
+                raise TokenInvalidError("Invalid refresh token: missing user ID")
+            
+            # Get token ID
+            token_id = payload.get("jti")
+            if not token_id:
+                logger.warning("Invalid refresh token: missing token ID")
+                raise TokenInvalidError("Invalid refresh token: missing token ID")
+            
+            try:
+                user_id_int = int(user_id)
+                if user_id_int <= 0:
+                    logger.warning(f"Invalid user ID in refresh token: {user_id_int}")
+                    raise TokenInvalidError("Token contains an invalid user ID (must be positive)")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid user ID format in refresh token: {user_id}")
+                raise TokenInvalidError(f"Invalid user ID format in refresh token: {str(e)}")
+                
+        except ExpiredSignatureError:
+            logger.warning("Refresh token has expired (JWT validation)")
+            raise TokenExpiredError("Refresh token has expired")
+        except (DecodeError, InvalidTokenError) as e:
+            logger.warning(f"Invalid refresh token format: {str(e)}")
+            raise TokenInvalidError(f"Invalid refresh token format: {str(e)}")
         
         with session_scope() as session:
             try:
@@ -718,7 +747,11 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
                     if db_token.status != TokenStatus.EXPIRED:
                         logger.info(f"Marking refresh token as expired: {token_id}")
                         db_token.status = TokenStatus.EXPIRED
-                        session.commit()
+                        try:
+                            session.commit()
+                        except SQLAlchemyError as e:
+                            logger.warning(f"Failed to update token status to expired: {str(e)}")
+                            # Continue with the validation process, as this is just a status update
                     raise TokenExpiredError("Refresh token has expired")
                 
                 # Finally check if it's active
@@ -730,6 +763,15 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
                 logger.info(f"Creating new access token for user: {user.id}")
                 retry_count = 0
                 access_token = None
+                
+                # Update the refresh token's last used timestamp
+                try:
+                    db_token.last_used_at = datetime.datetime.utcnow()
+                    session.flush()
+                    logger.debug(f"Updated last_used_at timestamp for refresh token: {token_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to update last_used_at timestamp for refresh token: {str(e)}")
+                    # Continue anyway, this is not critical
                 
                 while retry_count < max_retries:
                     try:
@@ -760,9 +802,15 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
                         # Create new access token
                         access_token = create_access_token(user, session)
                         
-                        # Update the refresh token's last used timestamp if needed
-                        # This could be added to the Token model if needed
+                        # Commit any pending changes
+                        try:
+                            session.commit()
+                        except SQLAlchemyError as e:
+                            session.rollback()
+                            logger.error(f"Database error committing changes during token refresh: {str(e)}")
+                            raise TokenInvalidError(f"Database error during token refresh: {str(e)}")
                         
+                        logger.info(f"Successfully created new access token for user {user.id}")
                         return {
                             "access_token": access_token,
                             "token_type": "bearer"
