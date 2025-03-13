@@ -4,7 +4,7 @@ API router and Pydantic models for the Authentication Core Component.
 This module provides FastAPI router with authentication endpoints and
 Pydantic models for request/response validation.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
@@ -14,8 +14,12 @@ from pydantic import BaseModel, EmailStr, Field, validator
 # We'll import Depends lazily when needed to avoid circular imports with asyncio
 
 # Import error classes and models to avoid circular imports
-from auth_core.auth import AuthError, InvalidCredentialsError, UserExistsError, UserNotFoundError
-from auth_core.models import User, UserRole
+from auth_core.auth import (
+    AccountLockedError, AuthError, InvalidCredentialsError, 
+    UserExistsError, UserNotFoundError
+)
+from auth_core.models import AuthAttempt, AuthAttemptResult, User, UserRole
+from auth_core.security import is_account_locked, get_lockout_time, MAX_LOGIN_ATTEMPTS
 from auth_core.token import TokenError, TokenExpiredError, TokenInvalidError, TokenRevokedError
 
 # Function imports will be done at function level to avoid circular imports
@@ -127,6 +131,46 @@ async def login(
         
         # Import at function level to avoid circular imports
         from auth_core.auth import authenticate_user
+        from auth_core.database import session_scope
+        
+        # First check if the account is locked due to too many failed attempts
+        with session_scope() as session:
+            # Try to find the user first
+            from auth_core.auth import AuthenticationManager
+            auth_manager = AuthenticationManager(session)
+            user = auth_manager._find_user(session, login_data.username)
+            
+            if user:
+                # Check for user-specific lockout
+                user_failures = session.query(AuthAttempt).filter(
+                    AuthAttempt.user_id == user.id,
+                    AuthAttempt.result == AuthAttemptResult.FAILURE,
+                    AuthAttempt.attempt_time >= datetime.utcnow() - timedelta(minutes=30)
+                ).all()
+                
+                # Also check for username-based failures
+                username_failures = AuthAttempt.get_recent_failures(
+                    session, client_ip, minutes=30, username=user.username
+                )
+                
+                # Create a set of IDs from user_failures to check for duplicates
+                user_failure_ids = {attempt.id for attempt in user_failures}
+                
+                # Only add username_failures that aren't already counted in user_failures
+                unique_username_failures = [
+                    attempt for attempt in username_failures 
+                    if attempt.id not in user_failure_ids
+                ]
+                
+                total_failures = len(user_failures) + len(unique_username_failures)
+                
+                # Check if account is locked
+                if is_account_locked(total_failures):
+                    lockout_time = get_lockout_time()
+                    raise AccountLockedError(
+                        f"Account locked due to too many failed login attempts. "
+                        f"Try again after {lockout_time.strftime('%H:%M:%S')}."
+                    )
         
         # Authenticate user
         user, tokens = authenticate_user(
@@ -151,6 +195,11 @@ async def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials"
+        )
+    except AccountLockedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
         )
     except AuthError as e:
         raise HTTPException(
