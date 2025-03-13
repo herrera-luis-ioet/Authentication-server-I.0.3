@@ -13,9 +13,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from auth_core.database import get_session, session_scope
 from auth_core.models import User, UserRole
 from auth_core.security import RateLimitExceededError, default_rate_limiter
-from auth_core.token import (TokenError, TokenExpiredError, TokenInvalidError,
-                           TokenRevokedError, get_token_data, get_user_id_from_token,
-                           validate_token)
+# Import only exception classes to avoid circular imports
+from auth_core.token import TokenError, TokenExpiredError, TokenInvalidError, TokenRevokedError
 
 # Security scheme for JWT tokens
 security = HTTPBearer(auto_error=False)
@@ -49,6 +48,9 @@ async def get_current_user(
     token = credentials.credentials
     
     try:
+        # Import validate_token at function level to avoid circular imports
+        from auth_core.token import validate_token
+        
         # Validate the token
         payload = validate_token(token)
         
@@ -162,6 +164,9 @@ async def get_optional_user(
     token = credentials.credentials
     
     try:
+        # Import validate_token at function level to avoid circular imports
+        from auth_core.token import validate_token
+        
         # Validate the token
         payload = validate_token(token)
         
