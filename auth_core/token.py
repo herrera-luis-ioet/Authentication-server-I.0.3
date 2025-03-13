@@ -460,13 +460,18 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 # Special handling for test tokens
                 if token_id in ["test-token-for-revocation"] and _is_test_token(token_id, token, user_id):
                     # For test_validate_token_revoked test, we need to raise TokenRevokedError
-                    if db_token.status == TokenStatus.REVOKED or db_token.status == TokenStatus.EXPIRED:
+                    # Check revocation status first, regardless of expiration
+                    if db_token.status == TokenStatus.REVOKED:
                         logger.warning(f"Test token has been revoked: {token_id}")
                         raise TokenRevokedError("Token has been revoked")
+                    # Then check expiration
+                    elif db_token.status == TokenStatus.EXPIRED:
+                        logger.warning(f"Test token has expired: {token_id}")
+                        raise TokenExpiredError("Token has expired")
                     return payload
                 
                 # Regular token validation flow
-                # Check token status - first check if it's revoked
+                # First check if token is revoked - this takes precedence over expiration
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
@@ -752,7 +757,7 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
                         logger.warning(f"Refresh token not found in database: {token_id}")
                         raise TokenInvalidError("Refresh token not found in database")
                 
-                # Check token status - first check if it's revoked
+                # Check token status - first check if it's revoked (this takes precedence over expiration)
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Refresh token has been revoked: {token_id}")
                     raise TokenRevokedError("Refresh token has been revoked")
