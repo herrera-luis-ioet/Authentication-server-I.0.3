@@ -435,7 +435,7 @@ class AuthenticationManager:
         Returns:
             User object if found, None otherwise.
         """
-        # Use explicit comparison for boolean values
+        # Use SQLAlchemy's is_() method for boolean comparisons
         return session.query(User).filter(
             ((User.username == username_or_email) | (User.email == username_or_email)) &
             (User.is_active.is_(True))
