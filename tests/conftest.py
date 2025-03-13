@@ -618,6 +618,7 @@ def token_for_revocation(test_user, db_session):
     
     # Delete any existing token with the same ID
     db_session.query(Token).filter_by(token_id=token_id).delete()
+    db_session.commit()
     
     # Create token in database
     db_token = Token(
@@ -634,6 +635,10 @@ def token_for_revocation(test_user, db_session):
     
     # Verify the token is active
     assert db_token.status == TokenStatus.ACTIVE
+    
+    # Double-check that the token is valid
+    from auth_core.token import is_token_valid
+    assert is_token_valid(token), "Token should be valid before revocation test"
     
     return token
 

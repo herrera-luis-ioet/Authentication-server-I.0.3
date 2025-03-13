@@ -1046,26 +1046,45 @@ def revoke_token(token: str) -> bool:
                     logger.info(f"Token already revoked: {token_id}")
                     return True
                 
+                # Store the current status for verification
+                original_status = db_token.status
+                
                 # Revoke the token
                 logger.info(f"Revoking token: {token_id}")
                 db_token.status = TokenStatus.REVOKED
                 db_token.revoked_at = datetime.datetime.utcnow()
                 
-                # Commit the changes
-                session.commit()
-                
-                # Verify the token was actually revoked
                 try:
-                    # Refresh the token from the database to ensure it was updated
-                    session.refresh(db_token)
-                    if db_token.status != TokenStatus.REVOKED:
-                        logger.error(f"Token {token_id} was not properly revoked")
+                    # Commit the changes
+                    session.commit()
+                    
+                    # Verify the token was actually revoked by refreshing from database
+                    # Use a new query to ensure we're getting fresh data
+                    verified_token = session.query(Token).filter(Token.token_id == token_id).first()
+                    
+                    if not verified_token or verified_token.status != TokenStatus.REVOKED:
+                        logger.error(f"Token {token_id} was not properly revoked despite successful commit")
+                        # If verification failed but we didn't get an exception on commit,
+                        # try one more time to explicitly revoke the token
+                        if verified_token and verified_token.status != TokenStatus.REVOKED:
+                            verified_token.status = TokenStatus.REVOKED
+                            verified_token.revoked_at = datetime.datetime.utcnow()
+                            try:
+                                session.commit()
+                                logger.info(f"Successfully revoked token {token_id} on second attempt")
+                                return True
+                            except SQLAlchemyError as e:
+                                logger.error(f"Failed to revoke token on second attempt: {str(e)}")
+                                session.rollback()
+                                return False
                         return False
+                    
+                    logger.debug(f"Successfully revoked token: {token_id}")
                     return True
                 except SQLAlchemyError as e:
-                    logger.error(f"Error verifying token revocation: {str(e)}")
-                    # If we can't verify, assume it worked since we didn't get an error on commit
-                    return True
+                    logger.error(f"Database error committing token revocation: {str(e)}")
+                    session.rollback()
+                    return False
                     
             except SQLAlchemyError as e:
                 logger.error(f"Database error during token revocation: {str(e)}")
