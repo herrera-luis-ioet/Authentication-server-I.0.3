@@ -16,8 +16,12 @@ from auth_core.models import (AuthAttempt, AuthAttemptResult, Token, TokenType,
                              User, UserRole)
 from auth_core.security import (MAX_LOGIN_ATTEMPTS, default_password_manager,
                               get_lockout_time, is_account_locked)
-from auth_core.token import (TokenError, create_token_pair, revoke_all_user_tokens,
-                           validate_token)
+
+# Import TokenError class definition to avoid circular imports with function-level imports
+from auth_core.token import TokenError
+
+# Constants
+LOGIN_LOCKOUT_MINUTES = 30  # Time in minutes for login lockout
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -138,6 +142,7 @@ class AuthenticationManager:
             )
             
             # Generate tokens
+            from auth_core.token import create_token_pair
             tokens = create_token_pair(user, session)
             
             return user, tokens
@@ -219,6 +224,7 @@ class AuthenticationManager:
                     )
                     
                     # Generate tokens
+                    from auth_core.token import create_token_pair
                     tokens = create_token_pair(user, session)
                     return user, tokens
                 
@@ -242,6 +248,7 @@ class AuthenticationManager:
         """
         try:
             # Validate and decode the token
+            from auth_core.token import validate_token
             payload = validate_token(token)
             
             # Get user ID from token
@@ -277,6 +284,7 @@ class AuthenticationManager:
         Returns:
             Number of tokens revoked.
         """
+        from auth_core.token import revoke_all_user_tokens
         return revoke_all_user_tokens(user_id, current_token_id)
     
     # PUBLIC_INTERFACE
@@ -346,6 +354,7 @@ class AuthenticationManager:
             session.commit()
             
             # Revoke all tokens
+            from auth_core.token import revoke_all_user_tokens
             revoke_all_user_tokens(user_id)
             
             logger.info(f"User deactivated: {user_id}")
