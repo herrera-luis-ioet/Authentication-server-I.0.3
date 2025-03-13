@@ -494,7 +494,10 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
-                
+
+                # Get current time for expiration check
+                current_time = datetime.datetime.utcnow()
+
                 # Special handling for test tokens
                 if token_id in ["test-token-validation-debug"] and _is_test_token(token_id, token, user_id):
                     logger.info(f"Ignoring expiration for test token: {token_id}")
@@ -513,9 +516,6 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                             # Continue with the validation process, as this is just a status update
                     
                     raise TokenExpiredError("Token has expired")
-                if db_token.status == TokenStatus.REVOKED:
-                    logger.warning(f"Token has been revoked: {token_id}")
-                    raise TokenRevokedError("Token has been revoked")
                 
                 # Check if user still exists and is active
                 user = session.query(User).filter(User.id == db_token.user_id).first()
