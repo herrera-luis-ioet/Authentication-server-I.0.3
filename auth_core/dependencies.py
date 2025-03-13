@@ -4,6 +4,7 @@ Dependency injection for the Authentication Core Component.
 This module provides FastAPI dependency functions for authentication,
 authorization, and other security-related functionality.
 """
+import time
 from typing import Optional, Union
 
 from fastapi import Depends, HTTPException, Request, status
@@ -265,6 +266,3 @@ auth_rate_limiter = RateLimitedRoute(
     error_message="Too many authentication attempts, please try again later"
 )
 
-
-# Import time module for rate limiter
-import time
