@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from auth_core.database import session_scope
+from auth_core.database import session_scope, refresh_object
 from auth_core.models import (AuthAttempt, AuthAttemptResult, Token, TokenType,
                              User, UserRole)
 from auth_core.security import (MAX_LOGIN_ATTEMPTS, default_password_manager,
@@ -152,6 +152,9 @@ class AuthenticationManager:
             from auth_core.token import create_token_pair
             tokens = create_token_pair(user, session)
             
+            # Refresh user object to prevent detached instance errors
+            refresh_object(session, user)
+            
             return user, tokens
     
     # PUBLIC_INTERFACE
@@ -266,7 +269,14 @@ class AuthenticationManager:
                     # Generate tokens
                     from auth_core.token import create_token_pair
                     tokens = create_token_pair(user, session)
+                    
+                    # Refresh user object to prevent detached instance errors
+                    refresh_object(session, user)
+                    
                     return user, tokens
+                
+                # Refresh user object to prevent detached instance errors
+                refresh_object(session, user)
                 
                 return user, None
                 
@@ -301,16 +311,23 @@ class AuthenticationManager:
             
             # Revoke the token
             with self._get_session_context() as session:
-                # Find the token in the database
-                db_token = session.query(Token).filter(Token.token_id == token_id).first()
-                
-                if db_token:
-                    db_token.revoke()
-                    session.commit()
-                    logger.info(f"Token revoked for user ID: {user_id}")
-                    return True
-                
-                return False
+                try:
+                    # Find the token in the database
+                    db_token = session.query(Token).filter(Token.token_id == token_id).first()
+                    
+                    if db_token:
+                        db_token.revoke()
+                        session.commit()
+                        # Refresh the token object to prevent detached instance errors
+                        refresh_object(session, db_token)
+                        logger.info(f"Token revoked for user ID: {user_id}")
+                        return True
+                    
+                    return False
+                except Exception as e:
+                    session.rollback()
+                    logger.error(f"Error during token revocation: {str(e)}")
+                    return False
                 
         except TokenError as e:
             logger.warning(f"Failed to revoke token: {str(e)}")
@@ -449,7 +466,13 @@ class AuthenticationManager:
                 
                 def __exit__(self, exc_type, exc_val, exc_tb):
                     # Don't close the session, as it was provided externally
-                    pass
+                    # But do rollback if there was an exception
+                    if exc_type is not None:
+                        try:
+                            self.session.rollback()
+                            logger.debug("Rolled back session due to exception")
+                        except Exception as e:
+                            logger.warning(f"Failed to rollback session: {str(e)}")
             
             return SessionContext(self.session)
         else:
@@ -531,13 +554,23 @@ class AuthenticationManager:
         Raises:
             AccountLockedError: If the user account is locked out.
         """
-        # Get recent failed attempts for this user
-        recent_failures = AuthAttempt.get_recent_failures(
+        # Get recent failed attempts for this user by user_id
+        user_failures = session.query(AuthAttempt).filter(
+            AuthAttempt.user_id == user.id,
+            AuthAttempt.result == AuthAttemptResult.FAILURE,
+            AuthAttempt.attempt_time >= datetime.utcnow() - timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+        ).all()
+        
+        # Also get failures by username (for cases where user_id might not be set)
+        username_failures = AuthAttempt.get_recent_failures(
             session, ip_address, minutes=LOGIN_LOCKOUT_MINUTES, username=user.username
         )
         
+        # Combine both types of failures
+        total_failures = len(user_failures) + len(username_failures)
+        
         # Check if the account is locked
-        if is_account_locked(len(recent_failures)):
+        if is_account_locked(total_failures) or total_failures >= MAX_LOGIN_ATTEMPTS:
             logger.warning(f"User account locked due to too many failed attempts: {user.username}")
             lockout_time = get_lockout_time()
             raise AccountLockedError(
@@ -576,10 +609,24 @@ class AuthenticationManager:
             result=result
         )
         
-        session.add(auth_attempt)
-        session.commit()
-        
-        return auth_attempt
+        try:
+            session.add(auth_attempt)
+            session.commit()
+            # Refresh to ensure all attributes are up-to-date
+            refresh_object(session, auth_attempt)
+            return auth_attempt
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to record authentication attempt: {str(e)}")
+            # Create a new attempt without committing it to the database
+            # This ensures the caller gets a valid object even if the database operation failed
+            return AuthAttempt(
+                user_id=user_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                username_attempt=username_attempt,
+                result=result
+            )
 
 
 # Create a default authentication manager for common use

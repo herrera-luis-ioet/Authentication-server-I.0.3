@@ -6,12 +6,12 @@ and database initialization functionality.
 """
 import os
 from contextlib import contextmanager
-from typing import Any, Generator
+from typing import Any, Generator, Optional
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, scoped_session
 
 from auth_core.config import settings
 
@@ -49,7 +49,8 @@ class Database:
             connect_args=connect_args,
             echo=settings.DATABASE_ECHO
         )
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        session_factory = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.SessionLocal = scoped_session(session_factory)
 
     def create_all(self) -> None:
         """Create all tables defined in the models."""
@@ -82,11 +83,28 @@ class Database:
         try:
             yield session
             session.commit()
-        except Exception:
+        except Exception as e:
             session.rollback()
             raise
         finally:
             session.close()
+            
+    def refresh_object(self, session: Session, obj: Any) -> None:
+        """
+        Refresh an object from the database to prevent detached instance errors.
+        
+        Args:
+            session: Database session.
+            obj: Object to refresh.
+        """
+        if obj is not None and session is not None:
+            try:
+                session.refresh(obj)
+            except Exception as e:
+                # If refresh fails (e.g., object was deleted), just log it
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to refresh object: {str(e)}")
 
 
 # Default database instance
@@ -130,3 +148,15 @@ def session_scope() -> Generator[Session, Any, None]:
     """
     with db.session_scope() as session:
         yield session
+
+
+# PUBLIC_INTERFACE
+def refresh_object(session: Session, obj: Any) -> None:
+    """
+    Refresh an object from the database to prevent detached instance errors.
+    
+    Args:
+        session: Database session.
+        obj: Object to refresh.
+    """
+    db.refresh_object(session, obj)
