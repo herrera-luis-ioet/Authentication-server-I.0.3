@@ -454,7 +454,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                         logger.warning(f"Token not found in database: {token_id}")
                         raise TokenInvalidError("Token not found in database")
                 
-                # Check token status
+                # Check token status - first check if it's revoked
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
@@ -706,12 +706,25 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
                         logger.warning(f"Refresh token not found in database: {token_id}")
                         raise TokenInvalidError("Refresh token not found in database")
                 
+                # Check token status - first check if it's revoked
+                if db_token.status == TokenStatus.REVOKED:
+                    logger.warning(f"Refresh token has been revoked: {token_id}")
+                    raise TokenRevokedError("Refresh token has been revoked")
+                
+                # Then check if it's expired
+                current_time = datetime.datetime.utcnow()
+                if db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
+                    # Update token status if it's expired but not marked as such
+                    if db_token.status != TokenStatus.EXPIRED:
+                        logger.info(f"Marking refresh token as expired: {token_id}")
+                        db_token.status = TokenStatus.EXPIRED
+                        session.commit()
+                    raise TokenExpiredError("Refresh token has expired")
+                
+                # Finally check if it's active
                 if db_token.status != TokenStatus.ACTIVE:
-                    logger.warning(f"Refresh token is not active: {token_id}, status: {db_token.status}")
-                    if db_token.status == TokenStatus.REVOKED:
-                        raise TokenRevokedError("Refresh token has been revoked")
-                    else:
-                        raise TokenExpiredError("Refresh token has expired")
+                    logger.warning(f"Refresh token has invalid status: {token_id}, status: {db_token.status}")
+                    raise TokenInvalidError(f"Refresh token has invalid status: {db_token.status}")
                 
                 # Create a new access token with retry logic
                 logger.info(f"Creating new access token for user: {user.id}")
@@ -1313,8 +1326,10 @@ def clean_expired_tokens(days_old: int = 30) -> int:
                             logger.error(f"Error creating test expired token: {str(e)}")
                 
                 # Find expired tokens older than the cutoff date
+                # Include both tokens explicitly marked as EXPIRED and those that are past their expiration date
                 expired_tokens = session.query(Token).filter(
-                    Token.expires_at < cutoff_date
+                    (Token.expires_at < cutoff_date) | 
+                    ((Token.status == TokenStatus.EXPIRED) & (Token.expires_at < cutoff_date))
                 ).all()
                 
                 count = len(expired_tokens)
