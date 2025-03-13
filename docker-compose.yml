@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  auth-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: auth-core:latest
+    container_name: auth-core-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=development
+      - DEBUG=true
+      - HOST=0.0.0.0
+      - PORT=8000
+      - RELOAD=false
+      - DATABASE_URL=sqlite:////data/auth.db
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecretkey}
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - JWT_REFRESH_TOKEN_EXPIRE_DAYS=7
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8080
+    volumes:
+      - ./:/app
+      - auth-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Development tools service
+  dev-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: auth-core:dev
+    container_name: auth-core-dev
+    command: /bin/sh -c "pip install -r requirements.txt && tail -f /dev/null"
+    volumes:
+      - ./:/app
+    environment:
+      - APP_ENV=development
+      - DEBUG=true
+    profiles:
+      - dev
+
+volumes:
+  auth-data:
+    driver: local
