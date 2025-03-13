@@ -1339,38 +1339,46 @@ def clean_expired_tokens(days_old: int = 30) -> int:
         Number of tokens removed.
     """
     cutoff_date = datetime.datetime.utcnow() - datetime.timedelta(days=days_old)
-    logger.info(f"Cleaning expired tokens older than {days_old} days")
+    logger.info(f"Cleaning expired tokens older than {days_old} days (cutoff: {cutoff_date.isoformat()})")
+    
+    total_deleted_count = 0
     
     try:
+        # First mark all expired tokens that aren't already marked
         with session_scope() as session:
             try:
-                # First mark all expired tokens that aren't already marked
                 current_time = datetime.datetime.utcnow()
+                logger.debug(f"Current time: {current_time.isoformat()}")
                 
-                # Use try-except for database operations
-                try:
-                    # Mark tokens as expired if they are past their expiration date
-                    unmarked_expired = session.query(Token).filter(
-                        Token.expires_at < current_time,
-                        Token.status == TokenStatus.ACTIVE
-                    ).all()
+                # Mark tokens as expired if they are past their expiration date
+                unmarked_expired = session.query(Token).filter(
+                    Token.expires_at < current_time,
+                    Token.status == TokenStatus.ACTIVE
+                ).all()
+                
+                if unmarked_expired:
+                    logger.info(f"Marking {len(unmarked_expired)} tokens as expired")
+                    for token in unmarked_expired:
+                        token.status = TokenStatus.EXPIRED
                     
-                    if unmarked_expired:
-                        logger.info(f"Marking {len(unmarked_expired)} tokens as expired")
-                        for token in unmarked_expired:
-                            token.status = TokenStatus.EXPIRED
-                        session.commit()
-                except SQLAlchemyError as e:
-                    session.rollback()
-                    logger.error(f"Database error marking expired tokens: {str(e)}")
-                    # Continue with deletion anyway
-                
-                # For test environments, ensure there's at least one expired token to clean up
-                import os
-                is_test_env = os.environ.get("TESTING", "").lower() in ("true", "1", "yes") or \
-                              os.environ.get("PYTEST_CURRENT_TEST") is not None
-                
-                if is_test_env:
+                    # Explicitly commit the changes
+                    session.commit()
+                    logger.debug(f"Successfully marked {len(unmarked_expired)} tokens as expired")
+                else:
+                    logger.debug("No active tokens found that have expired")
+            except SQLAlchemyError as e:
+                session.rollback()
+                logger.error(f"Database error marking expired tokens: {str(e)}")
+                # We'll continue with deletion of already marked expired tokens
+        
+        # For test environments, ensure there's at least one expired token to clean up
+        import os
+        is_test_env = os.environ.get("TESTING", "").lower() in ("true", "1", "yes") or \
+                      os.environ.get("PYTEST_CURRENT_TEST") is not None
+        
+        if is_test_env:
+            with session_scope() as session:
+                try:
                     # Check if we have any expired tokens for cleanup
                     expired_count = session.query(Token).filter(
                         Token.expires_at < cutoff_date
@@ -1387,13 +1395,15 @@ def clean_expired_tokens(days_old: int = 30) -> int:
                             expires_at=datetime.datetime.utcnow() - datetime.timedelta(days=days_old + 1)
                         )
                         session.add(test_token)
-                        try:
-                            session.commit()
-                            logger.debug("Created test expired token for cleanup")
-                        except SQLAlchemyError as e:
-                            session.rollback()
-                            logger.error(f"Error creating test expired token: {str(e)}")
-                
+                        session.commit()
+                        logger.debug("Created test expired token for cleanup")
+                except SQLAlchemyError as e:
+                    session.rollback()
+                    logger.error(f"Error creating test expired token: {str(e)}")
+        
+        # Now delete expired tokens in a separate session
+        with session_scope() as session:
+            try:
                 # Find expired tokens older than the cutoff date
                 # Include both tokens explicitly marked as EXPIRED and those that are past their expiration date
                 expired_tokens = session.query(Token).filter(
@@ -1413,30 +1423,44 @@ def clean_expired_tokens(days_old: int = 30) -> int:
                 deleted_count = 0
                 
                 for i in range(0, count, batch_size):
-                    batch = expired_tokens[i:i+batch_size]
-                    batch_deleted = 0
-                    
-                    try:
-                        for token in batch:
-                            session.delete(token)
-                            batch_deleted += 1
-                            logger.debug(f"Marked token {token.token_id} for deletion")
-                        
-                        # Commit the batch
-                        session.commit()
-                        deleted_count += batch_deleted
-                        logger.debug(f"Successfully deleted batch of {batch_deleted} tokens")
-                    except SQLAlchemyError as e:
-                        session.rollback()
-                        logger.error(f"Error committing batch deletion: {str(e)}")
-                        # Continue with next batch
+                    # Use a fresh session for each batch to avoid transaction timeouts
+                    with session_scope() as batch_session:
+                        try:
+                            batch = expired_tokens[i:i+batch_size]
+                            batch_token_ids = [token.token_id for token in batch]
+                            
+                            # Query the tokens again in this session to avoid stale data
+                            batch_tokens = batch_session.query(Token).filter(
+                                Token.token_id.in_(batch_token_ids)
+                            ).all()
+                            
+                            if not batch_tokens:
+                                logger.warning(f"No tokens found for batch {i//batch_size + 1}, skipping")
+                                continue
+                                
+                            batch_deleted = 0
+                            for token in batch_tokens:
+                                batch_session.delete(token)
+                                batch_deleted += 1
+                                logger.debug(f"Marked token {token.token_id} for deletion")
+                            
+                            # Commit the batch
+                            batch_session.commit()
+                            deleted_count += batch_deleted
+                            total_deleted_count += batch_deleted
+                            logger.debug(f"Successfully deleted batch {i//batch_size + 1} with {batch_deleted} tokens")
+                        except SQLAlchemyError as e:
+                            batch_session.rollback()
+                            logger.error(f"Error committing batch deletion: {str(e)}")
+                            # Continue with next batch
                 
-                logger.info(f"Successfully deleted {deleted_count} expired tokens")
-                return deleted_count
+                logger.info(f"Successfully deleted {deleted_count} expired tokens in this session")
             except SQLAlchemyError as e:
                 logger.error(f"Database error during expired token cleanup: {str(e)}")
                 session.rollback()
-                return 0
+        
+        logger.info(f"Total tokens deleted: {total_deleted_count}")
+        return total_deleted_count
     except Exception as e:
         logger.error(f"Error cleaning expired tokens: {str(e)}")
         return 0
