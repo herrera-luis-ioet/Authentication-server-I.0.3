@@ -8,6 +8,9 @@ This package provides core authentication functionality including:
 - Brute force attack prevention
 """
 
+# Import asyncio first to ensure it's fully initialized
+import asyncio
+
 __version__ = "0.1.0"
 
 # Export config constants first to avoid circular imports
