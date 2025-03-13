@@ -96,6 +96,9 @@ class AuthenticationManager:
             InvalidCredentialsError: If the credentials are invalid.
             AccountLockedError: If the account is locked due to too many failed attempts.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Use provided session or create a new one
         with self._get_session_context() as session:
             # Check if the IP is locked out due to too many failed attempts
@@ -119,7 +122,11 @@ class AuthenticationManager:
             self._check_user_lockout(session, user, ip_address)
             
             # Verify password
-            if not user.verify_password(password):
+            logger.debug(f"Verifying password for user: {user.username}")
+            verification_result = user.verify_password(password)
+            logger.debug(f"Password verification result: {verification_result}")
+            
+            if not verification_result:
                 # Record failed attempt
                 self._record_auth_attempt(
                     session, 
@@ -460,11 +467,34 @@ class AuthenticationManager:
         Returns:
             User object if found, None otherwise.
         """
-        # Use SQLAlchemy's is_() method for boolean comparisons
-        return session.query(User).filter(
-            ((User.username == username_or_email) | (User.email == username_or_email)) &
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Log the search parameters
+        logger.debug(f"Finding user with username or email: {username_or_email}")
+        
+        # First try to find by username
+        user = session.query(User).filter(
+            (User.username == username_or_email) & 
             (User.is_active.is_(True))
         ).first()
+        
+        if user:
+            logger.debug(f"Found user by username: {user.username}")
+            return user
+        
+        # If not found by username, try by email
+        user = session.query(User).filter(
+            (User.email == username_or_email) & 
+            (User.is_active.is_(True))
+        ).first()
+        
+        if user:
+            logger.debug(f"Found user by email: {user.email}")
+            return user
+        
+        logger.debug(f"No user found with username or email: {username_or_email}")
+        return None
     
     def _check_ip_lockout(self, session: Session, ip_address: str) -> None:
         """

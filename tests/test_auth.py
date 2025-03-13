@@ -27,8 +27,24 @@ from auth_core.security import MAX_LOGIN_ATTEMPTS
 
 def test_authenticate_user_success(test_user, db_session):
     """Test successful user authentication."""
-    # Authenticate user
-    user, tokens = authenticate_user(
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Log the test user details
+    logger.debug(f"Test user: {test_user.username}, ID: {test_user.id}")
+    logger.debug(f"Password hash: {test_user.hashed_password}")
+    
+    # Verify the password directly
+    verification_result = test_user.verify_password("password123")
+    logger.debug(f"Direct password verification result: {verification_result}")
+    assert verification_result, "Direct password verification failed"
+    
+    # Create a custom authentication manager with the test session
+    from auth_core.auth import AuthenticationManager
+    auth_manager = AuthenticationManager(db_session)
+    
+    # Authenticate user using the custom manager
+    user, tokens = auth_manager.authenticate_user(
         username_or_email=test_user.username,
         password="password123",
         ip_address="127.0.0.1",

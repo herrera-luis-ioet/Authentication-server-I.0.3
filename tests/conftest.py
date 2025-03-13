@@ -74,6 +74,20 @@ def patch_lockout_checks():
         yield
 
 
+@pytest.fixture(scope="function", autouse=True)
+def setup_auth_manager(db_session):
+    """Set up the default_auth_manager for each test."""
+    from auth_core.auth import default_auth_manager
+    
+    # Set the session for the default_auth_manager
+    default_auth_manager.session = db_session
+    
+    yield
+    
+    # Reset the session after the test
+    default_auth_manager.session = None
+
+
 @pytest.fixture(scope="function")
 def client(db_engine, db_session, clear_auth_attempts):
     """Create a FastAPI test client with a test database."""
@@ -86,22 +100,42 @@ def client(db_engine, db_session, clear_auth_attempts):
 
     app.dependency_overrides[get_session] = override_get_session
     
+    # Set the default_auth_manager to use the test session
+    from auth_core.auth import default_auth_manager
+    default_auth_manager.session = db_session
+    
     with TestClient(app) as test_client:
         yield test_client
     
     # Clean up
     app.dependency_overrides.clear()
+    default_auth_manager.session = None
 
 
 @pytest.fixture(scope="function")
 def test_user(db_session, clear_auth_attempts):
     """Create a test user."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # First, check if the user already exists and delete it
+    existing_user = db_session.query(User).filter(
+        (User.username == "testuser") | (User.email == "test@example.com")
+    ).first()
+    
+    if existing_user:
+        logger.debug(f"Deleting existing test user: {existing_user.username}")
+        db_session.delete(existing_user)
+        db_session.commit()
+    
+    # Create a new user
     user = User(
         username="testuser",
         email="test@example.com",
         role=UserRole.USER,
         is_active=True
     )
+    
     # Use the set_password method to properly hash the password
     user.set_password("password123")
     db_session.add(user)
@@ -109,11 +143,19 @@ def test_user(db_session, clear_auth_attempts):
     db_session.refresh(user)
     
     # Debug: Print the password hash and verify it works
-    print(f"DEBUG: Password hash: {user.hashed_password}")
-    print(f"DEBUG: Password verification result: {user.verify_password('password123')}")
+    logger.debug(f"Created test user: {user.username}")
+    logger.debug(f"Password hash: {user.hashed_password}")
     
     # Verify the password can be verified correctly
-    assert user.verify_password("password123")
+    verification_result = user.verify_password("password123")
+    logger.debug(f"Password verification result: {verification_result}")
+    assert verification_result, "Password verification failed in test_user fixture"
+    
+    # Ensure the user is attached to the session
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    
     return user
 
 

@@ -59,7 +59,31 @@ class User(Base):
         Args:
             password: Plain text password to hash and store.
         """
-        self.hashed_password = pwd_context.hash(password)
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Use passlib's CryptContext for hashing
+            self.hashed_password = pwd_context.hash(password)
+            logger.debug(f"Password hashed successfully for user: {self.username}")
+        except Exception as e:
+            # Fallback to direct bcrypt if passlib fails
+            import bcrypt
+            logger.warning(f"Passlib hashing failed, using direct bcrypt: {str(e)}")
+            
+            # Convert password to bytes if it's a string
+            if isinstance(password, str):
+                password_bytes = password.encode('utf-8')
+            else:
+                password_bytes = password
+                
+            # Generate salt and hash password
+            salt = bcrypt.gensalt()
+            hashed = bcrypt.hashpw(password_bytes, salt)
+            
+            # Store the hash as a string
+            self.hashed_password = hashed.decode('utf-8')
+            logger.debug(f"Password hashed with direct bcrypt for user: {self.username}")
 
     def verify_password(self, password: str) -> bool:
         """
@@ -71,7 +95,49 @@ class User(Base):
         Returns:
             True if the password matches, False otherwise.
         """
-        return pwd_context.verify(password, self.hashed_password)
+        import logging
+        import bcrypt
+        logger = logging.getLogger(__name__)
+        
+        if not password or not self.hashed_password:
+            logger.warning("Password verification failed: Empty password or hash")
+            return False
+            
+        try:
+            # First try using passlib's CryptContext
+            try:
+                result = pwd_context.verify(password, self.hashed_password)
+                if result:
+                    logger.debug(f"Password verification successful for user: {self.username}")
+                    return True
+            except Exception as e:
+                logger.warning(f"Passlib verification failed, trying direct bcrypt: {str(e)}")
+            
+            # If passlib fails, try direct bcrypt verification
+            # Convert password to bytes if it's a string
+            if isinstance(password, str):
+                password_bytes = password.encode('utf-8')
+            else:
+                password_bytes = password
+                
+            # Convert hash to bytes if it's a string
+            if isinstance(self.hashed_password, str):
+                hash_bytes = self.hashed_password.encode('utf-8')
+            else:
+                hash_bytes = self.hashed_password
+                
+            # Use bcrypt directly for verification
+            result = bcrypt.checkpw(password_bytes, hash_bytes)
+            
+            if result:
+                logger.debug(f"Password verification successful for user: {self.username}")
+            else:
+                logger.debug(f"Password verification failed for user: {self.username}")
+            
+            return result
+        except Exception as e:
+            logger.error(f"Password verification error for user {self.username}: {str(e)}")
+            return False
 
     def __repr__(self) -> str:
         """String representation of the User object."""
