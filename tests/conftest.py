@@ -339,13 +339,14 @@ def revoked_token(test_user, db_session):
     jwt_settings = get_jwt_settings()
     token_id = "test-revoked-token"
     
-    # Create payload
+    # Create payload with future expiration
+    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
     payload = {
         "sub": str(test_user.id),
         "jti": token_id,
         "type": TOKEN_TYPE_ACCESS,
         "iat": datetime.datetime.utcnow(),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=15),
+        "exp": expiry_time,
         "username": test_user.username,
         "email": test_user.email,
         "role": test_user.role.value
@@ -364,12 +365,20 @@ def revoked_token(test_user, db_session):
         user_id=test_user.id,
         token_type=TokenType.ACCESS,
         status=TokenStatus.REVOKED,
-        expires_at=datetime.datetime.utcnow() + datetime.timedelta(minutes=15),
+        expires_at=expiry_time,  # Use the same expiry time as in the token
         revoked_at=datetime.datetime.utcnow()
     )
     
+    # Delete any existing token with the same ID
+    db_session.query(Token).filter_by(token_id=token_id).delete()
+    
+    # Add and commit the new token
     db_session.add(db_token)
     db_session.commit()
+    db_session.refresh(db_token)
+    
+    # Verify the token is properly revoked
+    assert db_token.status == TokenStatus.REVOKED
     
     return token
 
@@ -587,13 +596,14 @@ def token_for_revocation(test_user, db_session):
     jwt_settings = get_jwt_settings()
     token_id = "test-token-for-revocation"
     
-    # Create payload
+    # Create payload with future expiration
+    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
     payload = {
         "sub": str(test_user.id),
         "jti": token_id,
         "type": TOKEN_TYPE_ACCESS,
         "iat": datetime.datetime.utcnow(),
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(minutes=15),
+        "exp": expiry_time,
         "username": test_user.username,
         "email": test_user.email,
         "role": test_user.role.value
@@ -606,17 +616,24 @@ def token_for_revocation(test_user, db_session):
         algorithm=jwt_settings["algorithm"]
     )
     
+    # Delete any existing token with the same ID
+    db_session.query(Token).filter_by(token_id=token_id).delete()
+    
     # Create token in database
     db_token = Token(
         token_id=token_id,
         user_id=test_user.id,
         token_type=TokenType.ACCESS,
         status=TokenStatus.ACTIVE,
-        expires_at=datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+        expires_at=expiry_time
     )
     
     db_session.add(db_token)
     db_session.commit()
+    db_session.refresh(db_token)
+    
+    # Verify the token is active
+    assert db_token.status == TokenStatus.ACTIVE
     
     return token
 
