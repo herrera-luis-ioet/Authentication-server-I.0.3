@@ -29,6 +29,32 @@ from auth_core.database import (
     session_scope,
 )
 
+# Export token functions
+from auth_core.token import (
+    create_access_token,
+    create_refresh_token,
+    create_token_pair,
+    validate_token,
+    refresh_access_token,
+    revoke_token,
+    revoke_all_user_tokens,
+    get_user_id_from_token,
+    get_token_data,
+    clean_expired_tokens,
+    is_token_valid,
+    get_token_expiration,
+    TokenError,
+    TokenExpiredError,
+    TokenInvalidError,
+    TokenRevokedError,
+)
+
+# Export config constants
+from auth_core.config import (
+    TOKEN_TYPE_ACCESS,
+    TOKEN_TYPE_REFRESH,
+)
+
 __all__ = [
     # Models
     "User",
@@ -44,4 +70,26 @@ __all__ = [
     "init_db",
     "get_session",
     "session_scope",
+    
+    # Token management
+    "create_access_token",
+    "create_refresh_token",
+    "create_token_pair",
+    "validate_token",
+    "refresh_access_token",
+    "revoke_token",
+    "revoke_all_user_tokens",
+    "get_user_id_from_token",
+    "get_token_data",
+    "clean_expired_tokens",
+    "is_token_valid",
+    "get_token_expiration",
+    "TokenError",
+    "TokenExpiredError",
+    "TokenInvalidError",
+    "TokenRevokedError",
+    
+    # Config constants
+    "TOKEN_TYPE_ACCESS",
+    "TOKEN_TYPE_REFRESH",
 ]
