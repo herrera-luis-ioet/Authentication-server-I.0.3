@@ -8,7 +8,7 @@ Note on Pydantic compatibility:
 This module includes a compatibility layer to support both Pydantic v1 and v2.
 In Pydantic v1, BaseSettings is in the pydantic module.
 In Pydantic v2, BaseSettings is moved to pydantic_settings module.
-Both Config class (v1) and model_config (v2) are provided for configuration.
+The module uses model_config for Pydantic v2 configuration.
 """
 import os
 import secrets
@@ -115,20 +115,13 @@ class Settings(BaseSettings):
     )
     LOG_FILE: Optional[str] = Field(default=None, env="LOG_FILE")
     
-    # Configuration compatible with both Pydantic v1 and v2
+    # Configuration for Pydantic v2
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
         "extra": "ignore"  # Allow extra fields from environment variables
     }
-    
-    # For Pydantic v1 compatibility
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-        extra = "ignore"  # Allow extra fields from environment variables
 
 
 # Create a global settings instance
