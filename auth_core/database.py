@@ -13,8 +13,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker
 
-# Default SQLite database path
-DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "auth.db")
+from auth_core.config import settings
 
 # Create SQLAlchemy base class for models
 Base = declarative_base()
@@ -36,12 +35,20 @@ class Database:
         Initialize the database connection.
 
         Args:
-            db_url: Database URL. If None, uses SQLite with the default path.
+            db_url: Database URL. If None, uses the URL from settings.
         """
         if db_url is None:
-            db_url = f"sqlite:///{DEFAULT_DB_PATH}"
+            db_url = settings.DATABASE_URL
         
-        self.engine = create_engine(db_url, connect_args={"check_same_thread": False})
+        connect_args = {}
+        if db_url.startswith("sqlite"):
+            connect_args["check_same_thread"] = False
+        
+        self.engine = create_engine(
+            db_url, 
+            connect_args=connect_args,
+            echo=settings.DATABASE_ECHO
+        )
         self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def create_all(self) -> None:

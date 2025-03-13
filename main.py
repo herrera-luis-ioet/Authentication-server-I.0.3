@@ -5,7 +5,7 @@ This is the main entry point for the Authentication Core Component,
 providing a FastAPI application with authentication endpoints.
 """
 import logging
-import os
+import os  # Keep this import for path operations
 from typing import Dict, List, Optional, Union
 
 import uvicorn
@@ -16,30 +16,32 @@ from fastapi.security import HTTPBearer
 
 from auth_core import __version__
 from auth_core.api import router as auth_router
+from auth_core.config import settings
 from auth_core.database import init_db
 from auth_core.token import TokenError
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=getattr(logging, settings.LOG_LEVEL),
+    format=settings.LOG_FORMAT,
 )
 logger = logging.getLogger("auth_core")
 
 # Create FastAPI application
 app = FastAPI(
-    title="Authentication Core API",
-    description="Authentication Core Component providing secure JWT token-based authentication",
+    title=settings.APP_NAME,
+    description=settings.APP_DESCRIPTION,
     version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    debug=settings.DEBUG,
 )
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -107,8 +109,7 @@ async def startup_event():
     logger.info("Initializing Authentication Core API")
     
     # Initialize database
-    db_url = os.environ.get("DATABASE_URL")
-    init_db(db_url)
+    init_db(settings.DATABASE_URL)
     
     logger.info("Authentication Core API initialized")
 
@@ -122,16 +123,11 @@ async def shutdown_event():
 
 # Run the application if executed directly
 if __name__ == "__main__":
-    # Get configuration from environment variables
-    host = os.environ.get("HOST", "0.0.0.0")
-    port = int(os.environ.get("PORT", 8000))
-    reload = os.environ.get("RELOAD", "False").lower() == "true"
-    
-    # Run the application
+    # Run the application using settings
     uvicorn.run(
         "main:app",
-        host=host,
-        port=port,
-        reload=reload,
-        log_level="info",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.RELOAD,
+        log_level=settings.LOG_LEVEL.lower(),
     )
