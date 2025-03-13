@@ -203,11 +203,28 @@ def decode_token(token: str) -> Dict[str, Any]:
         TokenInvalidError: If the token is invalid.
     """
     try:
+        # Decode without verifying expiration first to allow checking revocation status
+        # for expired tokens
         payload = jwt.decode(
             token,
             jwt_settings["secret_key"],
-            algorithms=[jwt_settings["algorithm"]]
+            algorithms=[jwt_settings["algorithm"]],
+            options={"verify_exp": False}
         )
+        
+        # Manually check expiration after decoding
+        exp = payload.get("exp")
+        if exp:
+            try:
+                exp_time = datetime.datetime.fromtimestamp(exp)
+                if exp_time < datetime.datetime.utcnow():
+                    # Store the payload for potential use in validate_token
+                    # before raising the exception
+                    payload["_expired"] = True
+                    raise TokenExpiredError("Token has expired")
+            except (ValueError, TypeError, OverflowError) as e:
+                raise TokenInvalidError(f"Invalid expiration timestamp: {str(e)}")
+        
         return payload
     except ExpiredSignatureError:
         raise TokenExpiredError("Token has expired")
@@ -295,8 +312,23 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        # First decode the token to validate signature and expiration
-        payload = decode_token(token)
+        # First decode the token to validate signature
+        # The decode_token function now decodes without verifying expiration first
+        # to allow checking revocation status before checking expiration
+        try:
+            payload = decode_token(token)
+            # Check if the token is expired but continue processing to check revocation status
+            token_expired = False
+        except TokenExpiredError:
+            # If token is expired, we still want to check if it's revoked
+            # Decode without verifying expiration
+            payload = jwt.decode(
+                token,
+                jwt_settings["secret_key"],
+                algorithms=[jwt_settings["algorithm"]],
+                options={"verify_exp": False}
+            )
+            token_expired = True
         
         # Validate required claims
         required_claims = ["sub", "jti", "type", "exp"]
@@ -572,12 +604,25 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
     try:
         # First decode the token to validate basic structure before database checks
         try:
-            # Just decode without full validation first
+            # Decode without verifying expiration first to allow checking revocation status
+            # for expired tokens
             payload = jwt.decode(
                 refresh_token,
                 jwt_settings["secret_key"],
-                algorithms=[jwt_settings["algorithm"]]
+                algorithms=[jwt_settings["algorithm"]],
+                options={"verify_exp": False}
             )
+            
+            # Check if token is expired but continue processing to check revocation status
+            exp = payload.get("exp")
+            if exp:
+                try:
+                    exp_time = datetime.datetime.fromtimestamp(exp)
+                    token_expired = exp_time < datetime.datetime.utcnow()
+                except (ValueError, TypeError, OverflowError):
+                    token_expired = False
+            else:
+                token_expired = False
             
             # Check token type
             if payload.get("type") != TOKEN_TYPE_REFRESH:
@@ -885,13 +930,19 @@ def revoke_token(token: str) -> bool:
         return False
         
     try:
-        # Try to decode the token without full validation
+        # Always decode without verifying expiration for revocation
+        # This ensures we can revoke expired tokens
         try:
-            payload = decode_token(token)
+            payload = jwt.decode(
+                token,
+                jwt_settings["secret_key"],
+                algorithms=[jwt_settings["algorithm"]],
+                options={"verify_exp": False}
+            )
             logger.debug("Successfully decoded token for revocation")
-        except (TokenExpiredError, TokenInvalidError):
-            # For expired or invalid tokens, decode without verification
-            logger.info("Token expired or invalid, decoding without verification for revocation")
+        except (DecodeError, InvalidTokenError) as e:
+            # If signature verification fails, try without verification
+            logger.info(f"Token signature invalid, decoding without verification for revocation: {str(e)}")
             try:
                 payload = jwt.decode(
                     token,
@@ -1299,7 +1350,7 @@ def get_user_id_from_token(token: str) -> int:
 
 
 # PUBLIC_INTERFACE
-def get_token_data(token: str, verify: bool = True) -> Dict[str, Any]:
+def get_token_data(token: str, verify: bool = True, verify_exp: bool = True) -> Dict[str, Any]:
     """
     Get all data from a token without full validation.
     
@@ -1308,14 +1359,16 @@ def get_token_data(token: str, verify: bool = True) -> Dict[str, Any]:
     
     Args:
         token: JWT token string.
-        verify: Whether to verify the token signature and expiration.
+        verify: Whether to verify the token signature.
                If False, will decode without verification.
+        verify_exp: Whether to verify the token expiration.
+               If False, will decode without checking expiration.
         
     Returns:
         Dictionary containing the decoded token payload.
         
     Raises:
-        TokenExpiredError: If the token has expired and verify=True.
+        TokenExpiredError: If the token has expired and verify_exp=True.
         TokenInvalidError: If the token is invalid and verify=True.
     """
     if not token:
@@ -1324,9 +1377,19 @@ def get_token_data(token: str, verify: bool = True) -> Dict[str, Any]:
         
     try:
         if verify:
-            return decode_token(token)
+            if verify_exp:
+                # Full verification including expiration
+                return decode_token(token)
+            else:
+                # Verify signature but not expiration
+                return jwt.decode(
+                    token,
+                    jwt_settings["secret_key"],
+                    algorithms=[jwt_settings["algorithm"]],
+                    options={"verify_exp": False}
+                )
         else:
-            # Decode without verification
+            # Decode without any verification
             return jwt.decode(
                 token,
                 options={"verify_signature": False, "verify_exp": False}
