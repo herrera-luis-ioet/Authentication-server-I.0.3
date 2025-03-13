@@ -454,13 +454,15 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                         logger.warning(f"Token not found in database: {token_id}")
                         raise TokenInvalidError("Token not found in database")
                 
+                # Get current time for expiration check
+                current_time = datetime.datetime.utcnow()
+                
                 # Check token status - first check if it's revoked
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
                 
                 # Check if token is expired
-                current_time = datetime.datetime.utcnow()
                 if db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
                     # Update token status if it's expired but not marked as such
                     if db_token.status != TokenStatus.EXPIRED:
