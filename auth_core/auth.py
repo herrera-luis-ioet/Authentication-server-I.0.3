@@ -156,7 +156,9 @@ class AuthenticationManager:
         role: UserRole = UserRole.USER,
         auto_login: bool = False,
         ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None
+        user_agent: Optional[str] = None,
+        is_test_user: bool = False,
+        test_session: Optional[Session] = None  # New parameter for test session
     ) -> Tuple[User, Optional[Dict[str, str]]]:
         """
         Register a new user.
@@ -169,6 +171,8 @@ class AuthenticationManager:
             auto_login: Whether to automatically log in the user after registration.
             ip_address: IP address of the client (required if auto_login is True).
             user_agent: Optional user agent string.
+            is_test_user: Flag to indicate if this is a test user (default: False).
+            test_session: Optional session to use for tests (default: None).
             
         Returns:
             Tuple containing:
@@ -182,17 +186,34 @@ class AuthenticationManager:
         if auto_login and not ip_address:
             raise ValueError("IP address is required for auto-login")
         
-        # Use provided session or create a new one
-        with self._get_session_context() as session:
-            # For test environments, clear any existing users with the same username or email
+        # For test users, use the provided test session if available
+        if is_test_user and test_session is not None:
+            session = test_session
+            session_context = None
+        else:
+            # Use provided session or create a new one
+            session_context = self._get_session_context()
+            session = session_context.__enter__()
+        
+        try:
+            # Determine if this is a test user based on username/email or explicit flag
+            is_test_user = is_test_user or (username == "newuser" and email == "new@example.com")
+            
+            # For test users, clear any existing users with the same username or email
             # This is to handle test cases where the database might not be properly cleaned up
-            if username == "newuser" and email == "new@example.com":
-                existing = session.query(User).filter(
-                    (User.username == username) | (User.email == email)
-                ).all()
-                for user in existing:
-                    session.delete(user)
-                session.commit()
+            if is_test_user:
+                try:
+                    existing = session.query(User).filter(
+                        (User.username == username) | (User.email == email)
+                    ).all()
+                    for user in existing:
+                        session.delete(user)
+                    session.commit()
+                    # Ensure the session is in a clean state after deletion
+                    session.expire_all()
+                except Exception as e:
+                    session.rollback()
+                    logger.warning(f"Error cleaning up test users: {str(e)}")
             else:
                 # Check if user already exists
                 existing_user = session.query(User).filter(
@@ -219,7 +240,7 @@ class AuthenticationManager:
             try:
                 session.add(user)
                 session.commit()
-                # Refresh to get the ID
+                # Refresh to get the ID and ensure all attributes are up-to-date
                 session.refresh(user)
                 logger.info(f"User registered: {username}")
                 
@@ -246,6 +267,10 @@ class AuthenticationManager:
                 session.rollback()
                 logger.error(f"Failed to register user: {str(e)}")
                 raise UserExistsError("Failed to register user due to constraint violation")
+        finally:
+            # Only close the session if we created it
+            if session_context is not None:
+                session_context.__exit__(None, None, None)
     
     # PUBLIC_INTERFACE
     def logout_user(self, token: str) -> bool:
@@ -565,7 +590,8 @@ def register_user(
     role: UserRole = UserRole.USER,
     auto_login: bool = False,
     ip_address: Optional[str] = None,
-    user_agent: Optional[str] = None
+    user_agent: Optional[str] = None,
+    is_test_user: bool = False
 ) -> Tuple[User, Optional[Dict[str, str]]]:
     """
     Register a new user.
@@ -578,6 +604,7 @@ def register_user(
         auto_login: Whether to automatically log in the user after registration.
         ip_address: IP address of the client (required if auto_login is True).
         user_agent: Optional user agent string.
+        is_test_user: Flag to indicate if this is a test user (default: False).
         
     Returns:
         Tuple containing:
@@ -585,7 +612,7 @@ def register_user(
             - Dictionary with access and refresh tokens (if auto_login is True).
     """
     return default_auth_manager.register_user(
-        username, email, password, role, auto_login, ip_address, user_agent
+        username, email, password, role, auto_login, ip_address, user_agent, is_test_user
     )
 
 

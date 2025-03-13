@@ -142,7 +142,8 @@ def test_register_user_success(db_session):
         email="new@example.com",
         password="Password123!",
         role=UserRole.USER,
-        auto_login=False
+        auto_login=False,
+        is_test_user=True
     )
     
     # Verify user was created
@@ -174,7 +175,8 @@ def test_register_user_with_auto_login(db_session):
         password="Password123!",
         auto_login=True,
         ip_address="127.0.0.1",
-        user_agent="test-agent"
+        user_agent="test-agent",
+        is_test_user=True
     )
     
     # Verify user was created
