@@ -10,13 +10,13 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import (
     AnyHttpUrl,
-    BaseSettings,
     EmailStr,
     Field,
     PostgresDsn,
     SecretStr,
     validator
 )
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -62,8 +62,8 @@ class Settings(BaseSettings):
         env="JWT_SECRET_KEY"
     )
     JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, env="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, env="JWT_REFRESH_TOKEN_EXPIRE_DAYS")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, env="REFRESH_TOKEN_EXPIRE_DAYS")
     
     # Security settings
     PASSWORD_MIN_LENGTH: int = Field(default=8, env="PASSWORD_MIN_LENGTH")
@@ -102,11 +102,12 @@ class Settings(BaseSettings):
     )
     LOG_FILE: Optional[str] = Field(default=None, env="LOG_FILE")
     
-    class Config:
-        """Pydantic configuration."""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "case_sensitive": True,
+        "extra": "ignore"  # Allow extra fields from environment variables
+    }
 
 
 # Create a global settings instance
