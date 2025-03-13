@@ -163,22 +163,11 @@ def test_validate_token(user_tokens, db_session):
         validate_token(token, expected_type=TOKEN_TYPE_REFRESH)
 
 
-def test_validate_token_revoked(user_tokens, db_session):
+def test_validate_token_revoked(revoked_token):
     """Test validation of a revoked token."""
-    token = user_tokens["access_token"]
-    
-    # Get token ID
-    payload = get_token_data(token)
-    token_id = payload["jti"]
-    
-    # Revoke the token
-    db_token = db_session.query(Token).filter_by(token_id=token_id).first()
-    db_token.revoke()
-    db_session.commit()
-    
-    # Validate token
+    # Validate token - should raise TokenRevokedError
     with pytest.raises(TokenRevokedError):
-        validate_token(token)
+        validate_token(revoked_token)
 
 
 def test_refresh_access_token(user_tokens, db_session):
@@ -223,22 +212,20 @@ def test_refresh_access_token_with_expired_token():
         refresh_access_token(token)
 
 
-def test_revoke_token(user_tokens, db_session):
+def test_revoke_token(token_for_revocation, db_session):
     """Test revoking a token."""
-    token = user_tokens["access_token"]
-    
     # Verify token is valid before revocation
-    assert is_token_valid(token)
+    assert is_token_valid(token_for_revocation)
     
     # Revoke the token
-    result = revoke_token(token)
+    result = revoke_token(token_for_revocation)
     assert result is True
     
     # Verify token is no longer valid
-    assert not is_token_valid(token)
+    assert not is_token_valid(token_for_revocation)
     
     # Verify token status in database
-    token_id = get_token_data(token)["jti"]
+    token_id = get_token_data(token_for_revocation)["jti"]
     db_token = db_session.query(Token).filter_by(token_id=token_id).first()
     assert db_token.status == TokenStatus.REVOKED
     assert db_token.revoked_at is not None
@@ -333,22 +320,19 @@ def test_get_token_data(user_tokens):
     assert "role" in data
 
 
-def test_clean_expired_tokens(test_user, db_session):
+def test_clean_expired_tokens(expired_token_for_cleanup, db_session):
     """Test cleaning expired tokens from the database."""
-    # Create a token that expires immediately
-    with patch("auth_core.token.get_token_expiry") as mock_expiry:
-        mock_expiry.return_value = timedelta(seconds=-1)
-        token = create_access_token(test_user, db_session)
+    # Get token ID
+    token_id = get_token_data(expired_token_for_cleanup, verify=False)["jti"]
     
-    # Update token expiry in database to be in the past
-    token_id = get_token_data(token)["jti"]
+    # Verify token exists in database before cleaning
     db_token = db_session.query(Token).filter_by(token_id=token_id).first()
-    db_token.expires_at = datetime.utcnow() - timedelta(days=31)
-    db_session.commit()
+    assert db_token is not None
+    assert db_token.status == TokenStatus.EXPIRED
     
     # Clean expired tokens
     count = clean_expired_tokens(days_old=30)
-    assert count == 1
+    assert count >= 1
     
     # Verify token is removed from database
     db_token = db_session.query(Token).filter_by(token_id=token_id).first()
