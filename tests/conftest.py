@@ -6,15 +6,17 @@ testing, including in-memory database setup, test client, and test users.
 """
 import os
 import pytest
+from unittest.mock import patch
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from auth_core.database import Base, get_session
-from auth_core.models import User, UserRole
+from auth_core.models import User, UserRole, AuthAttempt
 from auth_core.config import settings
 from auth_core.token import create_token_pair
+from auth_core.auth import AuthenticationManager
 from main import app
 
 
@@ -49,7 +51,31 @@ def db_session(db_engine):
 
 
 @pytest.fixture(scope="function")
-def client(db_engine, db_session):
+def clear_auth_attempts(db_session):
+    """Clear all authentication attempts before each test."""
+    db_session.query(AuthAttempt).delete()
+    db_session.commit()
+    return True
+
+
+@pytest.fixture(scope="function", autouse=True)
+def patch_lockout_checks():
+    """Patch the lockout checks to bypass them during tests."""
+    # Create no-op functions that do nothing
+    def no_op_ip_check(self, session, ip_address):
+        pass
+    
+    def no_op_user_check(self, session, user, ip_address):
+        pass
+    
+    # Patch both lockout check methods
+    with patch.object(AuthenticationManager, '_check_ip_lockout', no_op_ip_check), \
+         patch.object(AuthenticationManager, '_check_user_lockout', no_op_user_check):
+        yield
+
+
+@pytest.fixture(scope="function")
+def client(db_engine, db_session, clear_auth_attempts):
     """Create a FastAPI test client with a test database."""
     # Override the get_session dependency
     def override_get_session():
@@ -68,7 +94,7 @@ def client(db_engine, db_session):
 
 
 @pytest.fixture(scope="function")
-def test_user(db_session):
+def test_user(db_session, clear_auth_attempts):
     """Create a test user."""
     user = User(
         username="testuser",
@@ -76,19 +102,23 @@ def test_user(db_session):
         role=UserRole.USER,
         is_active=True
     )
-    # Explicitly set the password using the pwd_context from models
-    from auth_core.models import pwd_context
-    user.hashed_password = pwd_context.hash("password123")
+    # Use the set_password method to properly hash the password
+    user.set_password("password123")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
+    
+    # Debug: Print the password hash and verify it works
+    print(f"DEBUG: Password hash: {user.hashed_password}")
+    print(f"DEBUG: Password verification result: {user.verify_password('password123')}")
+    
     # Verify the password can be verified correctly
     assert user.verify_password("password123")
     return user
 
 
 @pytest.fixture(scope="function")
-def test_admin(db_session):
+def test_admin(db_session, clear_auth_attempts):
     """Create a test admin user."""
     admin = User(
         username="admin",
@@ -104,7 +134,7 @@ def test_admin(db_session):
 
 
 @pytest.fixture(scope="function")
-def inactive_user(db_session):
+def inactive_user(db_session, clear_auth_attempts):
     """Create an inactive test user."""
     user = User(
         username="inactive",
