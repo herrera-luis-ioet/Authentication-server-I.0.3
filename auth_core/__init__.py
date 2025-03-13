@@ -10,7 +10,21 @@ This package provides core authentication functionality including:
 
 __version__ = "0.1.0"
 
-# Export models
+# Export config constants first to avoid circular imports
+from auth_core.config import (
+    TOKEN_TYPE_ACCESS,
+    TOKEN_TYPE_REFRESH,
+)
+
+# Export database functions next as they're needed by models
+from auth_core.database import (
+    Base,
+    init_db,
+    get_session,
+    session_scope,
+)
+
+# Export models next as they're needed by token
 from auth_core.models import (
     User,
     UserRole,
@@ -21,15 +35,7 @@ from auth_core.models import (
     AuthAttemptResult,
 )
 
-# Export database functions
-from auth_core.database import (
-    Base,
-    init_db,
-    get_session,
-    session_scope,
-)
-
-# Export token functions
+# Export token functions last as they depend on the above modules
 from auth_core.token import (
     create_access_token,
     create_refresh_token,
@@ -47,12 +53,6 @@ from auth_core.token import (
     TokenExpiredError,
     TokenInvalidError,
     TokenRevokedError,
-)
-
-# Export config constants
-from auth_core.config import (
-    TOKEN_TYPE_ACCESS,
-    TOKEN_TYPE_REFRESH,
 )
 
 __all__ = [
