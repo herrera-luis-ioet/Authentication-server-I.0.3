@@ -339,8 +339,8 @@ def revoked_token(test_user, db_session):
     jwt_settings = get_jwt_settings()
     token_id = "test-revoked-token"
     
-    # Create payload with future expiration
-    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    # Create payload with future expiration (far in the future to avoid expiration issues)
+    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(days=30)
     payload = {
         "sub": str(test_user.id),
         "jti": token_id,
@@ -359,6 +359,10 @@ def revoked_token(test_user, db_session):
         algorithm=jwt_settings["algorithm"]
     )
     
+    # Delete any existing token with the same ID
+    db_session.query(Token).filter_by(token_id=token_id).delete()
+    db_session.commit()
+    
     # Create and revoke token in database
     db_token = Token(
         token_id=token_id,
@@ -368,9 +372,6 @@ def revoked_token(test_user, db_session):
         expires_at=expiry_time,  # Use the same expiry time as in the token
         revoked_at=datetime.datetime.utcnow()
     )
-    
-    # Delete any existing token with the same ID
-    db_session.query(Token).filter_by(token_id=token_id).delete()
     
     # Add and commit the new token
     db_session.add(db_token)
@@ -596,8 +597,8 @@ def token_for_revocation(test_user, db_session):
     jwt_settings = get_jwt_settings()
     token_id = "test-token-for-revocation"
     
-    # Create payload with future expiration
-    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    # Create payload with future expiration (far in the future to avoid expiration issues)
+    expiry_time = datetime.datetime.utcnow() + datetime.timedelta(days=30)
     payload = {
         "sub": str(test_user.id),
         "jti": token_id,
@@ -639,14 +640,27 @@ def token_for_revocation(test_user, db_session):
     # Make sure the token is not expired
     assert db_token.expires_at > datetime.datetime.utcnow()
     
-    # Double-check that the token is valid - but don't fail the fixture if it's not
-    # This allows tests to diagnose the issue
-    from auth_core.token import is_token_valid
-    import logging
-    logger = logging.getLogger(__name__)
-    is_valid = is_token_valid(token)
-    if not is_valid:
-        logger.warning(f"Token {token_id} validation failed in fixture, but continuing")
+    # Double-check that the token is valid
+    # We'll use a direct JWT decode instead of is_token_valid to avoid circular dependencies
+    # that might be causing the validation to fail
+    try:
+        decoded = jwt.decode(
+            token,
+            jwt_settings["secret_key"],
+            algorithms=[jwt_settings["algorithm"]]
+        )
+        assert decoded["jti"] == token_id, "Token ID mismatch"
+        assert decoded["sub"] == str(test_user.id), "User ID mismatch"
+        assert decoded["type"] == TOKEN_TYPE_ACCESS, "Token type mismatch"
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Token {token_id} successfully validated in fixture")
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Token validation error in fixture: {str(e)}")
+        raise
     
     return token
 
