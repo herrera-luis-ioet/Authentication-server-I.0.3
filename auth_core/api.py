@@ -8,8 +8,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field, validator
+
+# We'll import Depends lazily when needed to avoid circular imports with asyncio
 
 # Import error classes and models to avoid circular imports
 from auth_core.auth import AuthError, InvalidCredentialsError, UserExistsError, UserNotFoundError
@@ -414,7 +416,7 @@ async def logout(
 async def change_user_password(
     request: Request,
     password_request: PasswordChangeRequest,
-    token: str = Depends(lambda x: x.headers.get("Authorization").split(" ")[1] if x.headers.get("Authorization") else None),
+    token: str = None,
 ):
     """
     Change a user's password.
@@ -430,6 +432,13 @@ async def change_user_password(
     Raises:
         HTTPException: If password change fails.
     """
+    # Import Depends lazily to avoid circular imports with asyncio
+    from fastapi import Depends
+    
+    # Get token from Authorization header if not provided
+    if token is None:
+        token_extractor = lambda x: x.headers.get("Authorization").split(" ")[1] if x.headers.get("Authorization") else None
+        token = token_extractor(request)
     try:
         if not token:
             raise HTTPException(
