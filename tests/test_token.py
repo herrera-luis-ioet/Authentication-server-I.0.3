@@ -330,6 +330,10 @@ def test_clean_expired_tokens(expired_token_for_cleanup, db_session):
     assert db_token is not None
     assert db_token.status == TokenStatus.EXPIRED
     
+    # Make sure the token is old enough to be cleaned up
+    db_token.expires_at = datetime.utcnow() - timedelta(days=31)
+    db_session.commit()
+    
     # Clean expired tokens
     count = clean_expired_tokens(days_old=30)
     assert count >= 1

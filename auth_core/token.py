@@ -964,7 +964,8 @@ def revoke_token(token: str) -> bool:
                 
                 # Revoke the token
                 logger.info(f"Revoking token: {token_id}")
-                db_token.revoke()
+                db_token.status = TokenStatus.REVOKED
+                db_token.revoked_at = datetime.datetime.utcnow()
                 
                 try:
                     session.commit()
@@ -1075,7 +1076,8 @@ def revoke_all_user_tokens(user_id: int, exclude_token_id: Optional[str] = None)
                     
                     for token in batch:
                         try:
-                            token.revoke()
+                            token.status = TokenStatus.REVOKED
+                            token.revoked_at = datetime.datetime.utcnow()
                             batch_count += 1
                             count += 1
                             logger.debug(f"Revoked token {token.token_id} for user {user_id}")
@@ -1167,7 +1169,7 @@ def get_user_id_from_token(token: str) -> int:
 
 
 # PUBLIC_INTERFACE
-def get_token_data(token: str) -> Dict[str, Any]:
+def get_token_data(token: str, verify: bool = True) -> Dict[str, Any]:
     """
     Get all data from a token without full validation.
     
@@ -1176,20 +1178,29 @@ def get_token_data(token: str) -> Dict[str, Any]:
     
     Args:
         token: JWT token string.
+        verify: Whether to verify the token signature and expiration.
+               If False, will decode without verification.
         
     Returns:
         Dictionary containing the decoded token payload.
         
     Raises:
-        TokenExpiredError: If the token has expired.
-        TokenInvalidError: If the token is invalid.
+        TokenExpiredError: If the token has expired and verify=True.
+        TokenInvalidError: If the token is invalid and verify=True.
     """
     if not token:
         logger.warning("Empty token provided for data extraction")
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        return decode_token(token)
+        if verify:
+            return decode_token(token)
+        else:
+            # Decode without verification
+            return jwt.decode(
+                token,
+                options={"verify_signature": False, "verify_exp": False}
+            )
     except (TokenExpiredError, TokenInvalidError):
         # Re-raise these specific exceptions
         raise

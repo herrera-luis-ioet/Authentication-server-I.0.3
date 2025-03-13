@@ -69,8 +69,13 @@ def clear_auth_attempts(db_session):
 
 
 @pytest.fixture(scope="function", autouse=True)
-def patch_lockout_checks():
+def patch_lockout_checks(request):
     """Patch the lockout checks to bypass them during tests."""
+    # Skip patching for the account lockout test
+    if request.node.name == "test_authenticate_user_account_lockout":
+        yield
+        return
+        
     # Create no-op functions that do nothing
     def no_op_ip_check(self, session, ip_address):
         pass
