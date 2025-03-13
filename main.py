@@ -4,16 +4,20 @@ Authentication Core Component - FastAPI Application.
 This is the main entry point for the Authentication Core Component,
 providing a FastAPI application with authentication endpoints.
 """
+# Import asyncio first to ensure it's fully initialized
+import asyncio
 import logging
 import os  # Keep this import for path operations
 from typing import Dict, List, Optional, Union
 
+# Third-party imports
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer
 
+# Local application imports
 from auth_core import __version__
 from auth_core.api import router as auth_router
 from auth_core.config import settings
