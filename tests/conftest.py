@@ -76,10 +76,14 @@ def test_user(db_session):
         role=UserRole.USER,
         is_active=True
     )
-    user.set_password("password123")
+    # Explicitly set the password using the pwd_context from models
+    from auth_core.models import pwd_context
+    user.hashed_password = pwd_context.hash("password123")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
+    # Verify the password can be verified correctly
+    assert user.verify_password("password123")
     return user
 
 
