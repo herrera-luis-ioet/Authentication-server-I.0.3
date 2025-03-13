@@ -11,13 +11,12 @@ from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, EmailStr, Field, validator
 
-from auth_core.auth import (AuthError, InvalidCredentialsError, UserExistsError,
-                          UserNotFoundError, authenticate_user, change_password,
-                          logout_user, logout_user_all_devices, register_user)
+# Import error classes and models to avoid circular imports
+from auth_core.auth import AuthError, InvalidCredentialsError, UserExistsError, UserNotFoundError
 from auth_core.models import User, UserRole
-from auth_core.token import (TokenError, TokenExpiredError, TokenInvalidError,
-                           TokenRevokedError, get_token_data, get_user_id_from_token,
-                           is_token_valid, refresh_access_token, validate_token)
+from auth_core.token import TokenError, TokenExpiredError, TokenInvalidError, TokenRevokedError
+
+# Function imports will be done at function level to avoid circular imports
 
 # Create API router
 router = APIRouter(tags=["authentication"])
@@ -124,6 +123,9 @@ async def login(
         client_ip = request.client.host
         user_agent = request.headers.get("user-agent")
         
+        # Import at function level to avoid circular imports
+        from auth_core.auth import authenticate_user
+        
         # Authenticate user
         user, tokens = authenticate_user(
             login_data.username,
@@ -188,6 +190,9 @@ async def register(
         client_ip = request.client.host
         user_agent = request.headers.get("user-agent")
         
+        # Import at function level to avoid circular imports
+        from auth_core.auth import register_user
+        
         # Register user
         user, tokens = register_user(
             registration_data.username,
@@ -250,6 +255,9 @@ async def refresh(
         HTTPException: If token refresh fails.
     """
     try:
+        # Import at function level to avoid circular imports
+        from auth_core.token import refresh_access_token
+        
         # Refresh the token
         tokens = refresh_access_token(refresh_request.refresh_token)
         
@@ -301,6 +309,9 @@ async def validate(
         HTTPException: If token validation fails.
     """
     try:
+        # Import at function level to avoid circular imports
+        from auth_core.token import validate_token
+        
         # Validate the token
         payload = validate_token(
             validation_request.token,
@@ -353,6 +364,10 @@ async def logout(
     """
     try:
         if logout_request.all_devices:
+            # Import at function level to avoid circular imports
+            from auth_core.token import get_user_id_from_token
+            from auth_core.auth import logout_user_all_devices
+            
             # Get user ID from token
             user_id = get_user_id_from_token(logout_request.token)
             
@@ -364,6 +379,9 @@ async def logout(
                 details={"tokens_revoked": tokens_revoked}
             )
         else:
+            # Import at function level to avoid circular imports
+            from auth_core.auth import logout_user
+            
             # Logout from current device
             success = logout_user(logout_request.token)
             
@@ -418,6 +436,10 @@ async def change_user_password(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required"
             )
+        
+        # Import at function level to avoid circular imports
+        from auth_core.token import get_user_id_from_token
+        from auth_core.auth import change_password
         
         # Get user ID from token
         user_id = get_user_id_from_token(token)
