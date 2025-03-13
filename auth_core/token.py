@@ -605,6 +605,21 @@ def refresh_access_token(refresh_token: str, original_access_token: str = None) 
     
     logger.debug("Starting refresh_access_token process")
     
+    # Track original access token if provided
+    original_token_id = None
+    if original_access_token:
+        try:
+            # Decode without verification to get the token ID
+            original_payload = jwt.decode(
+                original_access_token,
+                options={"verify_signature": False, "verify_exp": False}
+            )
+            original_token_id = original_payload.get("jti")
+            logger.debug(f"Original access token ID: {original_token_id}")
+        except Exception as e:
+            logger.warning(f"Failed to decode original access token: {str(e)}")
+            # Continue without tracking the original token
+    
     try:
         # First decode the token to validate basic structure before database checks
         try:
@@ -806,29 +821,34 @@ def refresh_access_token(refresh_token: str, original_access_token: str = None) 
                         logger.warning(f"Refresh token not found in database: {token_id}")
                         raise TokenInvalidError("Refresh token not found in database")
                 
-                # Check token status - first check if it's revoked (this takes precedence over expiration)
+                # Validate token type first
+                if db_token.token_type != TokenType.REFRESH:
+                    logger.warning(f"Invalid token type for refresh: {db_token.token_type}")
+                    raise TokenInvalidError("Token is not a refresh token")
+                
+                # Check revocation status first (this takes precedence)
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Refresh token has been revoked: {token_id}")
                     raise TokenRevokedError("Refresh token has been revoked")
                 
-                # Then check if it's expired
-                current_time = datetime.datetime.utcnow()
-                if db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
-                    # Update token status if it's expired but not marked as such
-                    if db_token.status != TokenStatus.EXPIRED:
-                        logger.info(f"Marking refresh token as expired: {token_id}")
-                        db_token.status = TokenStatus.EXPIRED
-                        try:
-                            session.commit()
-                        except SQLAlchemyError as e:
-                            logger.warning(f"Failed to update token status to expired: {str(e)}")
-                            # Continue with the validation process, as this is just a status update
-                    raise TokenExpiredError("Refresh token has expired")
-                
-                # Finally check if it's active
+                # Check if token is active
                 if db_token.status != TokenStatus.ACTIVE:
+                    if db_token.status == TokenStatus.EXPIRED:
+                        raise TokenExpiredError("Refresh token has expired")
                     logger.warning(f"Refresh token has invalid status: {token_id}, status: {db_token.status}")
                     raise TokenInvalidError(f"Refresh token has invalid status: {db_token.status}")
+                
+                # Finally check expiration
+                current_time = datetime.datetime.utcnow()
+                if db_token.expires_at < current_time:
+                    # Update token status
+                    logger.info(f"Marking refresh token as expired: {token_id}")
+                    db_token.status = TokenStatus.EXPIRED
+                    try:
+                        session.commit()
+                    except SQLAlchemyError as e:
+                        logger.warning(f"Failed to update token status to expired: {str(e)}")
+                    raise TokenExpiredError("Refresh token has expired")
                 
                 # Create a new access token with retry logic
                 logger.info(f"Creating new access token for user: {user.id}")
@@ -852,7 +872,7 @@ def refresh_access_token(refresh_token: str, original_access_token: str = None) 
                         # Create new access token
                         access_token = create_access_token(user, session)
                         
-                        # Get the new token record
+                        # Get the new token record and update relationships
                         if access_token:
                             try:
                                 # Decode the new token to get its ID
@@ -865,9 +885,15 @@ def refresh_access_token(refresh_token: str, original_access_token: str = None) 
                                 new_token_id = new_payload.get("jti")
                                 if new_token_id:
                                     new_token = session.query(Token).filter(Token.token_id == new_token_id).first()
-                                    logger.debug(f"Retrieved new access token record: {new_token_id}")
+                                    if new_token:
+                                        # Update token relationships
+                                        new_token.refresh_token_id = token_id  # Link to refresh token
+                                        if original_token_id:
+                                            new_token.original_token_id = original_token_id  # Link to original token
+                                        session.flush()
+                                        logger.debug(f"Updated token relationships for new token: {new_token_id}")
                             except Exception as e:
-                                logger.warning(f"Failed to retrieve new access token record: {str(e)}")
+                                logger.warning(f"Failed to update token relationships: {str(e)}")
                         
                         # Ensure we have exactly three tokens in test environment
                         import os
