@@ -519,10 +519,8 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
                     # Always raise TokenRevokedError for revoked tokens, regardless of expiration
                     logger.info(f"Raising TokenRevokedError for revoked token: {token_id}")
-                    # Return early to avoid checking expiration
                     raise TokenRevokedError("Token has been revoked")
-                    # Do not continue to expiration check
-
+                
                 # Check expiration only if token is not revoked
                 logger.debug("Checking token expiration")
                 # Special handling for test tokens
