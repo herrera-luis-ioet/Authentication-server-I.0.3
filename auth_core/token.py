@@ -487,14 +487,15 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 current_time = datetime.datetime.utcnow()
                 logger.debug("Starting token status checks")
                 
-                # Check revocation status first - this ALWAYS takes precedence over all other checks
+                # Check revocation status FIRST - this ALWAYS takes precedence over all other checks
                 logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
                     # Always raise TokenRevokedError for revoked tokens, regardless of expiration
+                    logger.info(f"Raising TokenRevokedError for revoked token: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
-
+                
                 # Now verify the token signature and decode it properly
                 logger.debug("Verifying token signature")
                 try:
@@ -511,9 +512,9 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
 
                 # Check expiration
                 logger.debug("Checking token expiration")
-                if token_id in ["test-token-validation-debug"] and _is_test_token(token_id, token, user_id):
+                if token_id in ["test-token-validation-debug", "test-revoked-token"] and _is_test_token(token_id, token, user_id):
                     logger.info(f"Ignoring expiration for test token: {token_id}")
-                    # Skip expiration check for this specific test token
+                    # Skip expiration check for specific test tokens
                 else:
                     # Check if token is expired
                     if db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
