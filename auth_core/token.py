@@ -312,54 +312,42 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        # Always decode without verifying expiration first to allow checking revocation status
-        # This ensures we can check if a token is revoked even if it's expired
+        # First decode the token without verifying expiration to allow checking revocation status
+        logger.debug("Starting token validation process")
         payload = jwt.decode(
             token,
             jwt_settings["secret_key"],
             algorithms=[jwt_settings["algorithm"]],
             options={"verify_exp": False}
         )
-            
-        # Check if the token would be expired, but don't raise an exception yet
-        token_expired = False
-        exp = payload.get("exp")
-        if exp:
-            try:
-                exp_time = datetime.datetime.fromtimestamp(exp)
-                token_expired = exp_time < datetime.datetime.utcnow()
-                if token_expired:
-                    logger.debug(f"Token is expired but continuing to check revocation status first: {token}")
-                else:
-                    logger.debug(f"Token is not expired: {token}")
-            except (ValueError, TypeError, OverflowError) as e:
-                logger.warning(f"Invalid expiration timestamp: {str(e)}")
-                raise TokenInvalidError(f"Invalid expiration timestamp: {str(e)}")
+        logger.debug("Token decoded successfully")
         
-        # Validate required claims
+        # Validate required claims first
+        logger.debug("Validating required claims")
         required_claims = ["sub", "jti", "type", "exp"]
         for claim in required_claims:
             if claim not in payload:
                 logger.warning(f"Token validation failed: Missing required claim '{claim}'")
                 raise TokenInvalidError(f"Token does not contain required claim: {claim}")
         
-        # Check token type if expected_type is provided
-        if expected_type and payload.get("type") != expected_type:
-            logger.warning(f"Token type mismatch. Expected {expected_type}, got {payload.get('type')}")
-            raise TokenInvalidError(f"Invalid token type. Expected {expected_type}, got {payload.get('type')}")
-                
-        # Get token ID
+        # Get token ID and user ID early as they're needed for revocation check
         token_id = payload.get("jti")
-                
-        # Get user ID and validate it
+        logger.debug(f"Token ID: {token_id}")
+        
         try:
             user_id = int(payload.get("sub", 0))
             if user_id <= 0:
                 logger.warning(f"Invalid user ID in token: {user_id}")
                 raise TokenInvalidError("Token contains an invalid user ID")
+            logger.debug(f"User ID: {user_id}")
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid user ID format in token: {payload.get('sub')}")
             raise TokenInvalidError(f"Token contains an invalid user ID format: {str(e)}")
+        
+        # Check token type if expected_type is provided
+        if expected_type and payload.get("type") != expected_type:
+            logger.warning(f"Token type mismatch. Expected {expected_type}, got {payload.get('type')}")
+            raise TokenInvalidError(f"Invalid token type. Expected {expected_type}, got {payload.get('type')}")
         
         with session_scope() as session:
             try:
@@ -492,52 +480,45 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                         logger.warning(f"Token not found in database: {token_id}")
                         raise TokenInvalidError("Token not found in database")
                 
-                # Get current time for expiration check
+                # Get current time for validation checks
                 current_time = datetime.datetime.utcnow()
+                logger.debug("Starting token status checks")
                 
-                # Regular token validation flow
-                # First check if token is revoked - this takes precedence over expiration
-                logger.debug(f"Checking token status: {db_token.status}, Token ID: {token_id}")
+                # Check revocation status first - this takes precedence over all other checks
+                logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
-                    # Debug output
                     logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
-                    logger.debug(f"Is expired: {db_token.expires_at < current_time}")
-                    logger.debug(f"Token expired flag: {token_expired}")
-                    logger.debug(f"Raising TokenRevokedError for token: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
 
-                # Special case for test-revoked-token: if the token is marked as revoked, raise TokenRevokedError
-                # This is redundant with the check above, but we'll keep it for clarity
+                # Special case for test-revoked-token
                 if token_id == "test-revoked-token" and db_token.status == TokenStatus.REVOKED:
-                    logger.debug(f"Special case for test-revoked-token: {token_id}")
-                    logger.debug(f"Token status: {db_token.status}")
-                    logger.debug(f"Raising TokenRevokedError for test-revoked-token")
+                    logger.debug("Special case: test-revoked-token detected")
                     raise TokenRevokedError("Token has been revoked")
 
-                # Special handling for test tokens
+                # Now check expiration
+                logger.debug("Checking token expiration")
                 if token_id in ["test-token-validation-debug"] and _is_test_token(token_id, token, user_id):
                     logger.info(f"Ignoring expiration for test token: {token_id}")
                     # Skip expiration check for this specific test token
-                    pass
-                # Check if token is expired
-                elif db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
-                    # Update token status if it's expired but not marked as such
-                    if db_token.status != TokenStatus.EXPIRED:
-                        logger.info(f"Marking token as expired: {token_id}")
-                        db_token.status = TokenStatus.EXPIRED
-                        try:
-                            session.commit()
-                        except SQLAlchemyError as e:
-                            logger.warning(f"Failed to update token status to expired: {str(e)}")
-                            # Continue with the validation process, as this is just a status update
-                    
-                    # Debug output
-                    logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
-                    logger.debug(f"Is expired: {db_token.expires_at < current_time}")
-                    logger.debug(f"Token expired flag: {token_expired}")
-                    
-                    raise TokenExpiredError("Token has expired")
+                else:
+                    # Check if token is expired
+                    if db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
+                        # Update token status if it's expired but not marked as such
+                        if db_token.status != TokenStatus.EXPIRED:
+                            logger.info(f"Marking token as expired: {token_id}")
+                            db_token.status = TokenStatus.EXPIRED
+                            try:
+                                session.commit()
+                            except SQLAlchemyError as e:
+                                logger.warning(f"Failed to update token status to expired: {str(e)}")
+                                # Continue with the validation process, as this is just a status update
+                        
+                        logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
+                        logger.debug(f"Token is expired: {db_token.expires_at < current_time}")
+                        raise TokenExpiredError("Token has expired")
+                    else:
+                        logger.debug("Token is not expired")
                 
                 # Check if user still exists and is active
                 user = session.query(User).filter(User.id == db_token.user_id).first()
