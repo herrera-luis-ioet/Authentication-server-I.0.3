@@ -294,6 +294,15 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
     """
     Fully validate a JWT token, including database checks for revocation.
     
+    The validation is performed in the following order:
+    1. Basic token format validation
+    2. Required claims validation
+    3. Token signature verification
+    4. Database token existence check
+    5. Revocation status check
+    6. Expiration check
+    7. User existence and status check
+    
     Args:
         token: JWT token string.
         expected_type: Expected token type (access or refresh). If provided,
@@ -312,17 +321,23 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        # First decode the token without any verification to get token ID and basic claims
+        # Step 1: Basic token format validation
         logger.debug("Starting token validation process")
         try:
-            # Decode without any verification first
-            payload = jwt.decode(
-                token,
-                options={"verify_signature": False, "verify_exp": False}
-            )
-            logger.debug("Token decoded for initial validation")
+            # First try to decode with signature verification
+            try:
+                payload = jwt.decode(
+                    token,
+                    jwt_settings["secret_key"],
+                    algorithms=[jwt_settings["algorithm"]],
+                    options={"verify_exp": False}  # We'll check expiration later
+                )
+                logger.debug("Token signature verified successfully")
+            except (DecodeError, InvalidTokenError) as e:
+                logger.warning(f"Token signature verification failed: {str(e)}")
+                raise TokenInvalidError(f"Invalid token signature: {str(e)}")
             
-            # Validate required claims first
+            # Step 2: Required claims validation
             logger.debug("Validating required claims")
             required_claims = ["sub", "jti", "type", "exp"]
             for claim in required_claims:
@@ -330,7 +345,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     logger.warning(f"Token validation failed: Missing required claim '{claim}'")
                     raise TokenInvalidError(f"Token does not contain required claim: {claim}")
             
-            # Get token ID and user ID early as they're needed for revocation check
+            # Get token ID and user ID
             token_id = payload.get("jti")
             logger.debug(f"Token ID: {token_id}")
             
@@ -487,21 +502,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 current_time = datetime.datetime.utcnow()
                 logger.debug("Starting token status checks")
                 
-                # Verify the token signature and decode it properly
-                logger.debug("Verifying token signature")
-                try:
-                    payload = jwt.decode(
-                        token,
-                        jwt_settings["secret_key"],
-                        algorithms=[jwt_settings["algorithm"]],
-                        options={"verify_exp": False}  # We'll check expiration after revocation
-                    )
-                    logger.debug("Token signature verified successfully")
-                except (DecodeError, InvalidTokenError) as e:
-                    logger.warning(f"Token signature verification failed: {str(e)}")
-                    raise TokenInvalidError(f"Invalid token signature: {str(e)}")
-
-                # Check revocation status FIRST - this ALWAYS takes precedence over all other checks
+                # Step 5: Check revocation status FIRST - this ALWAYS takes precedence
                 logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
@@ -521,7 +522,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                         logger.info(f"Raising TokenRevokedError for test-revoked-token: {token_id}")
                         raise TokenRevokedError("Token has been revoked")
                 
-                # Check expiration only after confirming token is not revoked
+                # Step 6: Check expiration after revocation
                 logger.debug("Checking token expiration")
                 # Special handling for test tokens
                 if token_id == "test-token-validation-debug" and _is_test_token(token_id, token, user_id):
@@ -546,7 +547,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     else:
                         logger.debug("Token is not expired")
                 
-                # Check if user still exists and is active
+                # Step 7: Check user existence and status last
                 user = session.query(User).filter(User.id == db_token.user_id).first()
                 if not user:
                     logger.warning(f"User not found for token: {token_id}")
