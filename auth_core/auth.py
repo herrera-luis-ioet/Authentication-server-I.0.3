@@ -149,7 +149,7 @@ class AuthenticationManager:
             )
             
             # Generate tokens
-            from auth_core.token import create_token_pair
+            from auth_core.auth_token import create_token_pair
             tokens = create_token_pair(user, session)
             
             # Refresh user object to prevent detached instance errors
