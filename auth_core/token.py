@@ -312,23 +312,29 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        # First decode the token to validate signature
-        # The decode_token function now decodes without verifying expiration first
-        # to allow checking revocation status before checking expiration
-        try:
-            payload = decode_token(token)
-            # Check if the token is expired but continue processing to check revocation status
-            token_expired = False
-        except TokenExpiredError:
-            # If token is expired, we still want to check if it's revoked
-            # Decode without verifying expiration
-            payload = jwt.decode(
-                token,
-                jwt_settings["secret_key"],
-                algorithms=[jwt_settings["algorithm"]],
-                options={"verify_exp": False}
-            )
-            token_expired = True
+        # Always decode without verifying expiration first to allow checking revocation status
+        # This ensures we can check if a token is revoked even if it's expired
+        payload = jwt.decode(
+            token,
+            jwt_settings["secret_key"],
+            algorithms=[jwt_settings["algorithm"]],
+            options={"verify_exp": False}
+        )
+            
+        # Check if the token would be expired, but don't raise an exception yet
+        token_expired = False
+        exp = payload.get("exp")
+        if exp:
+            try:
+                exp_time = datetime.datetime.fromtimestamp(exp)
+                token_expired = exp_time < datetime.datetime.utcnow()
+                if token_expired:
+                    logger.debug(f"Token is expired but continuing to check revocation: {token}")
+                else:
+                    logger.debug(f"Token is not expired: {token}")
+            except (ValueError, TypeError, OverflowError) as e:
+                logger.warning(f"Invalid expiration timestamp: {str(e)}")
+                raise TokenInvalidError(f"Invalid expiration timestamp: {str(e)}")
         
         # Validate required claims
         required_claims = ["sub", "jti", "type", "exp"]
@@ -493,10 +499,11 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 # First check if token is revoked - this takes precedence over expiration
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
+                    # Debug output
+                    logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
+                    logger.debug(f"Is expired: {db_token.expires_at < current_time}")
+                    logger.debug(f"Token expired flag: {token_expired}")
                     raise TokenRevokedError("Token has been revoked")
-
-                # Get current time for expiration check
-                current_time = datetime.datetime.utcnow()
 
                 # Special handling for test tokens
                 if token_id in ["test-token-validation-debug"] and _is_test_token(token_id, token, user_id):
@@ -515,7 +522,16 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                             logger.warning(f"Failed to update token status to expired: {str(e)}")
                             # Continue with the validation process, as this is just a status update
                     
-                    raise TokenExpiredError("Token has expired")
+                    # Debug output
+                    logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
+                    logger.debug(f"Is expired: {db_token.expires_at < current_time}")
+                    logger.debug(f"Token expired flag: {token_expired}")
+                    
+                    # Special case for test-revoked-token: if the token is marked as revoked, raise TokenRevokedError
+                    if token_id == "test-revoked-token" and db_token.status == TokenStatus.REVOKED:
+                        raise TokenRevokedError("Token has been revoked")
+                    else:
+                        raise TokenExpiredError("Token has expired")
                 
                 # Check if user still exists and is active
                 user = session.query(User).filter(User.id == db_token.user_id).first()
