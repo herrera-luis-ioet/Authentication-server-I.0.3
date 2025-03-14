@@ -168,17 +168,22 @@ def test_validate_token_revoked(revoked_token, db_session):
     # This test verifies that a revoked token raises TokenRevokedError
     # The revoked_token fixture has already set up the token and patched the validate_token function
     
-    # We'll manually check for the exception type
-    try:
-        # This should raise TokenRevokedError
+    # First, verify that the token is actually revoked in the database
+    import jwt
+    payload = jwt.decode(
+        revoked_token,
+        options={"verify_signature": False, "verify_exp": False}
+    )
+    token_id = payload.get("jti")
+    
+    # Check the token status in the database
+    db_token = db_session.query(Token).filter_by(token_id=token_id).first()
+    assert db_token is not None, "Token not found in database"
+    assert db_token.status == TokenStatus.REVOKED, f"Token status is {db_token.status}, expected REVOKED"
+    
+    # Now test the validate_token function
+    with pytest.raises(TokenRevokedError):
         validate_token(revoked_token)
-        pytest.fail("Expected TokenRevokedError but no exception was raised")
-    except TokenRevokedError:
-        # This is the expected exception
-        pass
-    except Exception as e:
-        # If we get a different exception, fail the test
-        pytest.fail(f"Expected TokenRevokedError but got {type(e).__name__}: {str(e)}")
 
 
 def test_refresh_access_token(user_tokens, db_session):

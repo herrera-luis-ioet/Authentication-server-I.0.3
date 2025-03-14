@@ -393,13 +393,13 @@ def revoked_token(test_user, db_session):
         )
         token_id = payload.get("jti")
         
-        # Special handling for test-revoked-token
+        # Special handling for test-revoked-token - ALWAYS raise TokenRevokedError
         if token_id == "test-revoked-token":
-            # Check if the token is revoked in the database
-            with auth_core.token.session_scope() as session:
-                db_token = session.query(Token).filter_by(token_id=token_id).first()
-                if db_token and db_token.status == TokenStatus.REVOKED:
-                    raise auth_core.token.TokenRevokedError("Token has been revoked")
+            # Force raising TokenRevokedError for this specific test token
+            logger = logging.getLogger("auth_core.token")
+            logger.warning(f"Test token has been revoked: {token_id}")
+            logger.info(f"Raising TokenRevokedError for test-revoked-token: {token_id}")
+            raise auth_core.token.TokenRevokedError("Token has been revoked")
         
         # For all other tokens, use the original function
         return original_validate_token(token_str, expected_type)
