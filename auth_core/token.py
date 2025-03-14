@@ -312,42 +312,45 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         raise TokenInvalidError("Token cannot be empty")
         
     try:
-        # First decode the token without verifying expiration to allow checking revocation status
+        # First decode the token without any verification to get token ID and basic claims
         logger.debug("Starting token validation process")
-        payload = jwt.decode(
-            token,
-            jwt_settings["secret_key"],
-            algorithms=[jwt_settings["algorithm"]],
-            options={"verify_exp": False}
-        )
-        logger.debug("Token decoded successfully")
-        
-        # Validate required claims first
-        logger.debug("Validating required claims")
-        required_claims = ["sub", "jti", "type", "exp"]
-        for claim in required_claims:
-            if claim not in payload:
-                logger.warning(f"Token validation failed: Missing required claim '{claim}'")
-                raise TokenInvalidError(f"Token does not contain required claim: {claim}")
-        
-        # Get token ID and user ID early as they're needed for revocation check
-        token_id = payload.get("jti")
-        logger.debug(f"Token ID: {token_id}")
-        
         try:
-            user_id = int(payload.get("sub", 0))
-            if user_id <= 0:
-                logger.warning(f"Invalid user ID in token: {user_id}")
-                raise TokenInvalidError("Token contains an invalid user ID")
-            logger.debug(f"User ID: {user_id}")
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid user ID format in token: {payload.get('sub')}")
-            raise TokenInvalidError(f"Token contains an invalid user ID format: {str(e)}")
-        
-        # Check token type if expected_type is provided
-        if expected_type and payload.get("type") != expected_type:
-            logger.warning(f"Token type mismatch. Expected {expected_type}, got {payload.get('type')}")
-            raise TokenInvalidError(f"Invalid token type. Expected {expected_type}, got {payload.get('type')}")
+            # Decode without any verification first
+            payload = jwt.decode(
+                token,
+                options={"verify_signature": False, "verify_exp": False}
+            )
+            logger.debug("Token decoded for initial validation")
+            
+            # Validate required claims first
+            logger.debug("Validating required claims")
+            required_claims = ["sub", "jti", "type", "exp"]
+            for claim in required_claims:
+                if claim not in payload:
+                    logger.warning(f"Token validation failed: Missing required claim '{claim}'")
+                    raise TokenInvalidError(f"Token does not contain required claim: {claim}")
+            
+            # Get token ID and user ID early as they're needed for revocation check
+            token_id = payload.get("jti")
+            logger.debug(f"Token ID: {token_id}")
+            
+            try:
+                user_id = int(payload.get("sub", 0))
+                if user_id <= 0:
+                    logger.warning(f"Invalid user ID in token: {user_id}")
+                    raise TokenInvalidError("Token contains an invalid user ID")
+                logger.debug(f"User ID: {user_id}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid user ID format in token: {payload.get('sub')}")
+                raise TokenInvalidError(f"Token contains an invalid user ID format: {str(e)}")
+            
+            # Check token type if expected_type is provided
+            if expected_type and payload.get("type") != expected_type:
+                logger.warning(f"Token type mismatch. Expected {expected_type}, got {payload.get('type')}")
+                raise TokenInvalidError(f"Invalid token type. Expected {expected_type}, got {payload.get('type')}")
+        except Exception as e:
+            logger.error(f"Error during initial token decode: {str(e)}")
+            raise TokenInvalidError(f"Invalid token format: {str(e)}")
         
         with session_scope() as session:
             try:
@@ -492,7 +495,21 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     # Always raise TokenRevokedError for revoked tokens, regardless of expiration
                     raise TokenRevokedError("Token has been revoked")
 
-                # Now check expiration
+                # Now verify the token signature and decode it properly
+                logger.debug("Verifying token signature")
+                try:
+                    payload = jwt.decode(
+                        token,
+                        jwt_settings["secret_key"],
+                        algorithms=[jwt_settings["algorithm"]],
+                        options={"verify_exp": False}  # We'll check expiration after
+                    )
+                    logger.debug("Token signature verified successfully")
+                except (DecodeError, InvalidTokenError) as e:
+                    logger.warning(f"Token signature verification failed: {str(e)}")
+                    raise TokenInvalidError(f"Invalid token signature: {str(e)}")
+
+                # Check expiration
                 logger.debug("Checking token expiration")
                 if token_id in ["test-token-validation-debug"] and _is_test_token(token_id, token, user_id):
                     logger.info(f"Ignoring expiration for test token: {token_id}")
