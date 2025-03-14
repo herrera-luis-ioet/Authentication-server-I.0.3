@@ -20,7 +20,7 @@ from auth_core import __version__
 from auth_core.api import router as auth_router
 from auth_core.config import settings
 from auth_core.database import init_db
-from auth_core.token import TokenError
+from auth_core.auth_token import TokenError
 
 # Configure logging
 logging.basicConfig(
