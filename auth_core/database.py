@@ -4,11 +4,12 @@ Database configuration and session management for the Authentication Core Compon
 This module provides SQLAlchemy setup for SQLite database, session management,
 and database initialization functionality.
 """
+import logging
 import os
 from contextlib import contextmanager
 from typing import Any, Generator, Optional
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, sessionmaker, scoped_session
@@ -93,18 +94,32 @@ class Database:
         """
         Refresh an object from the database to prevent detached instance errors.
         
+        This function handles detached objects by attempting to reattach them
+        to the session before refreshing. If the object is not bound to a session,
+        it will try to add it first.
+        
         Args:
             session: Database session.
             obj: Object to refresh.
         """
+        logger = logging.getLogger(__name__)
+        
         if obj is not None and session is not None:
             try:
+                # Check if object is attached to the session
+                if hasattr(obj, '__mapper__') and not inspect(obj).persistent:
+                    logger.debug(f"Object {obj} is detached, attempting to add to session")
+                    try:
+                        session.add(obj)
+                        session.flush()
+                    except Exception as e:
+                        logger.warning(f"Failed to add detached object to session: {str(e)}")
+                
+                # Now try to refresh the object
                 session.refresh(obj)
             except Exception as e:
-                # If refresh fails (e.g., object was deleted), just log it
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning(f"Failed to refresh object: {str(e)}")
+                # If refresh fails, log the error with more details
+                logger.warning(f"Failed to refresh object {type(obj).__name__}: {str(e)}")
 
 
 # Default database instance
@@ -154,6 +169,10 @@ def session_scope() -> Generator[Session, Any, None]:
 def refresh_object(session: Session, obj: Any) -> None:
     """
     Refresh an object from the database to prevent detached instance errors.
+    
+    This function handles detached objects by attempting to reattach them
+    to the session before refreshing. If the object is not bound to a session,
+    it will try to add it first.
     
     Args:
         session: Database session.
