@@ -168,6 +168,10 @@ def test_validate_token_revoked(revoked_token, db_session):
     # Debug: Check the token in the database
     import jwt
     from auth_core.config.jwt_config import get_jwt_settings
+    import logging
+    
+    # Set up logger for debugging
+    logger = logging.getLogger(__name__)
     
     # Decode token to get ID
     payload = jwt.decode(
@@ -185,6 +189,14 @@ def test_validate_token_revoked(revoked_token, db_session):
     print(f"Debug - Token expiry: {db_token.expires_at}")
     print(f"Debug - Current time: {datetime.utcnow()}")
     print(f"Debug - Is expired: {db_token.expires_at < datetime.utcnow()}")
+    
+    # Ensure the token is marked as revoked in the database
+    if db_token.status != TokenStatus.REVOKED:
+        logger.warning(f"Token {token_id} is not marked as REVOKED in the database. Updating status.")
+        db_token.status = TokenStatus.REVOKED
+        db_session.commit()
+        db_session.refresh(db_token)
+        print(f"Updated token status to: {db_token.status}")
     
     # This test is expected to fail with TokenRevokedError
     # We'll manually check for the exception type

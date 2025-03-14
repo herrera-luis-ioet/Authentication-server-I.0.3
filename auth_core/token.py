@@ -484,16 +484,12 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 current_time = datetime.datetime.utcnow()
                 logger.debug("Starting token status checks")
                 
-                # Check revocation status first - this takes precedence over all other checks
+                # Check revocation status first - this ALWAYS takes precedence over all other checks
                 logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
-                    raise TokenRevokedError("Token has been revoked")
-
-                # Special case for test-revoked-token
-                if token_id == "test-revoked-token" and db_token.status == TokenStatus.REVOKED:
-                    logger.debug("Special case: test-revoked-token detected")
+                    # Always raise TokenRevokedError for revoked tokens, regardless of expiration
                     raise TokenRevokedError("Token has been revoked")
 
                 # Now check expiration
