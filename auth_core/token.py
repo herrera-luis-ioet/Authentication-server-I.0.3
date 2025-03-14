@@ -487,16 +487,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 current_time = datetime.datetime.utcnow()
                 logger.debug("Starting token status checks")
                 
-                # Check revocation status FIRST - this ALWAYS takes precedence over all other checks
-                logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
-                if db_token.status == TokenStatus.REVOKED:
-                    logger.warning(f"Token has been revoked: {token_id}")
-                    logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
-                    # Always raise TokenRevokedError for revoked tokens, regardless of expiration
-                    logger.info(f"Raising TokenRevokedError for revoked token: {token_id}")
-                    raise TokenRevokedError("Token has been revoked")
-                
-                # Now verify the token signature and decode it properly
+                # Verify the token signature and decode it properly
                 logger.debug("Verifying token signature")
                 try:
                     payload = jwt.decode(
@@ -509,6 +500,15 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 except (DecodeError, InvalidTokenError) as e:
                     logger.warning(f"Token signature verification failed: {str(e)}")
                     raise TokenInvalidError(f"Invalid token signature: {str(e)}")
+
+                # Check revocation status FIRST - this ALWAYS takes precedence over all other checks
+                logger.debug(f"Checking revocation status: {db_token.status}, Token ID: {token_id}")
+                if db_token.status == TokenStatus.REVOKED:
+                    logger.warning(f"Token has been revoked: {token_id}")
+                    logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
+                    # Always raise TokenRevokedError for revoked tokens, regardless of expiration
+                    logger.info(f"Raising TokenRevokedError for revoked token: {token_id}")
+                    raise TokenRevokedError("Token has been revoked")
 
                 # Check expiration
                 logger.debug("Checking token expiration")
