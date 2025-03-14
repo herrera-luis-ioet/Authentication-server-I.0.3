@@ -165,7 +165,18 @@ def _create_token(user: User, token_type: str, session: Session) -> str:
             session.flush()  # Flush to check for foreign key constraints before committing
             
             # Refresh the user object to ensure it's still valid
-            refresh_object(session, user)
+            try:
+                refresh_object(session, user)
+            except SQLAlchemyError as e:
+                # Handle detached object errors gracefully
+                logger.warning(f"Failed to refresh user object: {str(e)}. Continuing with token creation.")
+                # If the user object is detached, we can try to reattach it
+                if "not bound to a Session" in str(e) or "detached" in str(e).lower():
+                    try:
+                        session.add(user)
+                        logger.debug("Reattached user object to session")
+                    except SQLAlchemyError as reattach_error:
+                        logger.warning(f"Failed to reattach user object: {str(reattach_error)}")
             
             session.commit()
             logger.debug(f"Created {token_type} token for user {user.id}")
