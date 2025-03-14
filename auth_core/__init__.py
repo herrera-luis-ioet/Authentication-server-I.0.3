@@ -8,9 +8,6 @@ This package provides core authentication functionality including:
 - Brute force attack prevention
 """
 
-# Import asyncio first to ensure it's fully initialized
-import asyncio
-
 __version__ = "0.1.0"
 
 # Export config constants first to avoid circular imports
@@ -39,7 +36,7 @@ from auth_core.models import (
 )
 
 # Export token functions last as they depend on the above modules
-from auth_core.token import (
+from auth_core.auth_token import (
     create_access_token,
     create_refresh_token,
     create_token_pair,

@@ -18,7 +18,7 @@ from auth_core.security import (MAX_LOGIN_ATTEMPTS, default_password_manager,
                               get_lockout_time, is_account_locked)
 
 # Import TokenError class definition to avoid circular imports with function-level imports
-from auth_core.token import TokenError
+from auth_core.auth_token import TokenError
 
 # Constants
 LOGIN_LOCKOUT_MINUTES = 30  # Time in minutes for login lockout

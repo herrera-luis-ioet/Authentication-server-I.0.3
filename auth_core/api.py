@@ -20,7 +20,7 @@ from auth_core.auth import (
 )
 from auth_core.models import AuthAttempt, AuthAttemptResult, User, UserRole
 from auth_core.security import is_account_locked, get_lockout_time, MAX_LOGIN_ATTEMPTS
-from auth_core.token import TokenError, TokenExpiredError, TokenInvalidError, TokenRevokedError
+from auth_core.auth_token import TokenError, TokenExpiredError, TokenInvalidError, TokenRevokedError
 
 # Function imports will be done at function level to avoid circular imports
 
