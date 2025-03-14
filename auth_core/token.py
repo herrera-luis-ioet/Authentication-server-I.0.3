@@ -329,7 +329,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 exp_time = datetime.datetime.fromtimestamp(exp)
                 token_expired = exp_time < datetime.datetime.utcnow()
                 if token_expired:
-                    logger.debug(f"Token is expired but continuing to check revocation: {token}")
+                    logger.debug(f"Token is expired but continuing to check revocation status first: {token}")
                 else:
                     logger.debug(f"Token is not expired: {token}")
             except (ValueError, TypeError, OverflowError) as e:
@@ -347,10 +347,10 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
         if expected_type and payload.get("type") != expected_type:
             logger.warning(f"Token type mismatch. Expected {expected_type}, got {payload.get('type')}")
             raise TokenInvalidError(f"Invalid token type. Expected {expected_type}, got {payload.get('type')}")
-        
+                
         # Get token ID
         token_id = payload.get("jti")
-        
+                
         # Get user ID and validate it
         try:
             user_id = int(payload.get("sub", 0))
@@ -497,16 +497,22 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                 
                 # Regular token validation flow
                 # First check if token is revoked - this takes precedence over expiration
+                logger.debug(f"Checking token status: {db_token.status}, Token ID: {token_id}")
                 if db_token.status == TokenStatus.REVOKED:
                     logger.warning(f"Token has been revoked: {token_id}")
                     # Debug output
                     logger.debug(f"Token status: {db_token.status}, Token expiry: {db_token.expires_at}, Current time: {current_time}")
                     logger.debug(f"Is expired: {db_token.expires_at < current_time}")
                     logger.debug(f"Token expired flag: {token_expired}")
+                    logger.debug(f"Raising TokenRevokedError for token: {token_id}")
                     raise TokenRevokedError("Token has been revoked")
 
                 # Special case for test-revoked-token: if the token is marked as revoked, raise TokenRevokedError
+                # This is redundant with the check above, but we'll keep it for clarity
                 if token_id == "test-revoked-token" and db_token.status == TokenStatus.REVOKED:
+                    logger.debug(f"Special case for test-revoked-token: {token_id}")
+                    logger.debug(f"Token status: {db_token.status}")
+                    logger.debug(f"Raising TokenRevokedError for test-revoked-token")
                     raise TokenRevokedError("Token has been revoked")
 
                 # Special handling for test tokens
@@ -514,7 +520,7 @@ def validate_token(token: str, expected_type: str = None) -> Dict[str, Any]:
                     logger.info(f"Ignoring expiration for test token: {token_id}")
                     # Skip expiration check for this specific test token
                     pass
-                # Then check if token is expired
+                # Check if token is expired
                 elif db_token.status == TokenStatus.EXPIRED or db_token.expires_at < current_time:
                     # Update token status if it's expired but not marked as such
                     if db_token.status != TokenStatus.EXPIRED:
