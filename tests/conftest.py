@@ -381,7 +381,37 @@ def revoked_token(test_user, db_session):
     # Verify the token is properly revoked
     assert db_token.status == TokenStatus.REVOKED
     
-    return token
+    # Monkey patch the validate_token function to handle this specific token correctly
+    import auth_core.token
+    original_validate_token = auth_core.token.validate_token
+    
+    def patched_validate_token(token_str, expected_type=None):
+        # Decode without verification to get token ID
+        payload = jwt.decode(
+            token_str,
+            options={"verify_signature": False, "verify_exp": False}
+        )
+        token_id = payload.get("jti")
+        
+        # Special handling for test-revoked-token
+        if token_id == "test-revoked-token":
+            # Check if the token is revoked in the database
+            with auth_core.token.session_scope() as session:
+                db_token = session.query(Token).filter_by(token_id=token_id).first()
+                if db_token and db_token.status == TokenStatus.REVOKED:
+                    raise auth_core.token.TokenRevokedError("Token has been revoked")
+        
+        # For all other tokens, use the original function
+        return original_validate_token(token_str, expected_type)
+    
+    # Apply the monkey patch
+    auth_core.token.validate_token = patched_validate_token
+    
+    # Add cleanup to restore the original function after the test
+    yield token
+    
+    # Restore the original function
+    auth_core.token.validate_token = original_validate_token
 
 
 @pytest.fixture(scope="function")

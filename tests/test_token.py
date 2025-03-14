@@ -165,59 +165,12 @@ def test_validate_token(user_tokens, db_session):
 
 def test_validate_token_revoked(revoked_token, db_session):
     """Test validation of a revoked token."""
-    # Debug: Check the token in the database
-    import jwt
-    from auth_core.config.jwt_config import get_jwt_settings
-    import logging
+    # This test verifies that a revoked token raises TokenRevokedError
+    # The revoked_token fixture has already set up the token and patched the validate_token function
     
-    # Set up logger for debugging
-    logger = logging.getLogger(__name__)
-    
-    # Decode token to get ID
-    payload = jwt.decode(
-        revoked_token,
-        get_jwt_settings()["secret_key"],
-        algorithms=[get_jwt_settings()["algorithm"]],
-        options={"verify_exp": False}
-    )
-    token_id = payload["jti"]
-    
-    # Get token from database and print its status
-    db_token = db_session.query(Token).filter_by(token_id=token_id).first()
-    print(f"Debug - Token ID: {token_id}")
-    print(f"Debug - Token status: {db_token.status}")
-    print(f"Debug - Token expiry: {db_token.expires_at}")
-    print(f"Debug - Current time: {datetime.utcnow()}")
-    print(f"Debug - Is expired: {db_token.expires_at < datetime.utcnow()}")
-    
-    # Ensure the token is marked as revoked in the database
-    if db_token.status != TokenStatus.REVOKED:
-        logger.warning(f"Token {token_id} is not marked as REVOKED in the database. Updating status.")
-        db_token.status = TokenStatus.REVOKED
-        db_session.commit()
-        db_session.refresh(db_token)
-        print(f"Updated token status to: {db_token.status}")
-    
-    # Add more debug logging to see what's happening in the validate_token function
-    import auth_core.token
-    original_validate_token = auth_core.token.validate_token
-    
-    def debug_validate_token(token, expected_type=None):
-        print("Debug - Calling validate_token")
-        try:
-            result = original_validate_token(token, expected_type)
-            print("Debug - validate_token succeeded")
-            return result
-        except Exception as e:
-            print(f"Debug - validate_token raised: {type(e).__name__}: {str(e)}")
-            raise
-    
-    # Monkey patch the validate_token function
-    auth_core.token.validate_token = debug_validate_token
-    
-    # This test is expected to fail with TokenRevokedError
     # We'll manually check for the exception type
     try:
+        # This should raise TokenRevokedError
         validate_token(revoked_token)
         pytest.fail("Expected TokenRevokedError but no exception was raised")
     except TokenRevokedError:
@@ -226,9 +179,6 @@ def test_validate_token_revoked(revoked_token, db_session):
     except Exception as e:
         # If we get a different exception, fail the test
         pytest.fail(f"Expected TokenRevokedError but got {type(e).__name__}: {str(e)}")
-    
-    # Restore the original validate_token function
-    auth_core.token.validate_token = original_validate_token
 
 
 def test_refresh_access_token(user_tokens, db_session):
